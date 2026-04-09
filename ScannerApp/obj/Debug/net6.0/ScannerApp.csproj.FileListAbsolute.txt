@@ -1,0 +1,15 @@
+/home/client01/Área de trabalho/periciahacker/ScannerApp/bin/Debug/net6.0/ScannerApp
+/home/client01/Área de trabalho/periciahacker/ScannerApp/bin/Debug/net6.0/ScannerApp.deps.json
+/home/client01/Área de trabalho/periciahacker/ScannerApp/bin/Debug/net6.0/ScannerApp.runtimeconfig.json
+/home/client01/Área de trabalho/periciahacker/ScannerApp/bin/Debug/net6.0/ScannerApp.dll
+/home/client01/Área de trabalho/periciahacker/ScannerApp/bin/Debug/net6.0/ScannerApp.pdb
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.csproj.AssemblyReference.cache
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.GeneratedMSBuildEditorConfig.editorconfig
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.AssemblyInfoInputs.cache
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.AssemblyInfo.cs
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.csproj.CoreCompileInputs.cache
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.dll
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/refint/ScannerApp.dll
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.pdb
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ScannerApp.genruntimeconfig.cache
+/home/client01/Área de trabalho/periciahacker/ScannerApp/obj/Debug/net6.0/ref/ScannerApp.dll

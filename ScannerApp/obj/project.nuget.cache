@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "N4ALNldwGiu3nB/wY1W2z/k42Cx1IjcEUQr6Ud5Q40HJhlZ4a/Lc/gmsAYqq9c0NTCasGeUlKK+2r6LMs3i/CQ==",
+  "success": true,
+  "projectFilePath": "/home/client01/Área de trabalho/periciahacker/ScannerApp/ScannerApp.csproj",
+  "expectedPackageFiles": [
+    "/home/client01/.nuget/packages/microsoft.netcore.app.ref/6.0.8/microsoft.netcore.app.ref.6.0.8.nupkg.sha512",
+    "/home/client01/.nuget/packages/microsoft.aspnetcore.app.ref/6.0.8/microsoft.aspnetcore.app.ref.6.0.8.nupkg.sha512",
+    "/home/client01/.nuget/packages/microsoft.netcore.app.host.linux-x64/6.0.8/microsoft.netcore.app.host.linux-x64.6.0.8.nupkg.sha512"
+  ],
+  "logs": []
+}
