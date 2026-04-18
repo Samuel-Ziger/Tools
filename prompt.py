@@ -1,4 +1,3 @@
-
 from langflow.load import run_flow_from_json
 import sqlite3, json
 
@@ -15,5 +14,3 @@ try:
     print(f"RESPOSTA DA IA: {result}")
 except Exception as e:
     print(f"Erro: {e}")
-
-
