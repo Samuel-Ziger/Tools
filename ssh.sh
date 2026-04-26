@@ -10,7 +10,7 @@ PASSWORDS=(
 "F147-0356agipV"
 "averylongpasswordfornohackertodiscover"
 "VSZ785-aWB15#q"
-"42W#wskb-62wA$sc"
+"42W#wskb-62wA\$sc"
 )
 
 echo "[+] Iniciando brute force em $TARGET..."
