@@ -64,8 +64,22 @@ PORTS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -p) PORTS="$2"; shift 2 ;;
-    -t) TIMEOUT="$2"; shift 2 ;;
+    -p)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "[!] -p precisa de valor (ex.: 22,80 ou 1-1024)"
+        usage
+      fi
+      PORTS="$2"
+      shift 2
+      ;;
+    -t)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "[!] -t precisa de segundos (número)"
+        usage
+      fi
+      TIMEOUT="$2"
+      shift 2
+      ;;
     -v) VERBOSE=1; shift ;;
     -h|--help) usage ;;
     *)
