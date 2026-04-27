@@ -98,7 +98,8 @@ main() {
   done
 
   export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:${PATH}"
-  export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+  # libblas3 (lapack) instala em .../x86_64-linux-gnu/blas/ — sem isso o nmap nao acha libblas.so.3
+  export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/blas:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/engines-1.1:${NMAP_ROOT}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 
   if "${NMAP_ROOT}/usr/bin/nmap" --version >/dev/null 2>&1; then
     ok "nmap OK: $("${NMAP_ROOT}/usr/bin/nmap" --version | head -1)"
@@ -113,7 +114,7 @@ main() {
 [+] Ambiente (copie no shell do alvo):
     export NMAP_ROOT=${NMAP_ROOT}
     export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:\$PATH"
-    export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/lib/x86_64-linux-gnu:\${LD_LIBRARY_PATH:-}"
+    export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/blas:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/engines-1.1:${NMAP_ROOT}/lib/x86_64-linux-gnu:\${LD_LIBRARY_PATH:-}"
 
 [+] Teste rapido:
     nmap -Pn -p 22,80,443 --open 127.0.0.1
