@@ -3,7 +3,7 @@ set -euo pipefail
 
 TARGET="${1:-10.20.20.57}"
 SSH_BIN="${SSH_BIN:-/tmp/openssh-root/usr/bin/ssh}"
-LOG_FILE="${LOG_FILE:-ssh_pair_test_$(date +%F_%H%M%S).log}"
+LOG_FILE="${LOG_FILE:-/tmp/ssh_pair_test_$(date +%F_%H%M%S).log}"
 
 # Teste 1:1 com pares conhecidos (sem combinacao cruzada).
 PAIRS=(
@@ -26,6 +26,12 @@ if ! command -v script >/dev/null 2>&1; then
   echo "[!] comando 'script' nao encontrado."
   exit 1
 fi
+
+touch "${LOG_FILE}" 2>/dev/null || LOG_FILE="/tmp/ssh_pair_test_fallback_$(date +%F_%H%M%S).log"
+touch "${LOG_FILE}" 2>/dev/null || {
+  echo "[!] Sem permissao para criar log. Vai rodar sem log em arquivo."
+  LOG_FILE="/dev/null"
+}
 
 echo "[*] Target: ${TARGET}" | tee -a "${LOG_FILE}"
 echo "[*] SSH_BIN: ${SSH_BIN}" | tee -a "${LOG_FILE}"
