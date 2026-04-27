@@ -58,12 +58,13 @@ main() {
   mkdir -p "${DEB_DIR}"
   log "Cache de .deb: ${DEB_DIR}"
 
-  # Bullseye amd64 — sem dbus/libdbus (polui etc/ e systemd; nmap nao precisa para scan).
-  # So libpcre3 e libssh2-1 (o binario nmap liga a elas).
+  # Bullseye amd64 — sem o pacote "dbus" (daemon; polui etc/ e systemd).
+  # libpcap0.8 no Debian liga a libdbus-1.so.3 -> precisa de libdbus-1-3 (só libs em lib/).
   local debs=(
     "l/lapack/libblas3_3.9.0-3+deb11u1_amd64.deb"
     "libl/liblinear/liblinear4_2.3.0+dfsg-5_amd64.deb"
     "l/lua5.3/liblua5.3-0_5.3.3-1.1+deb11u1_amd64.deb"
+    "d/dbus/libdbus-1-3_1.12.28-0+deb11u1_amd64.deb"
     "libp/libpcap/libpcap0.8_1.10.0-2_amd64.deb"
     "l/lua-lpeg/lua-lpeg_1.0.2-1_amd64.deb"
     "o/openssl/libssl1.1_1.1.1w-0+deb11u1_amd64.deb"
