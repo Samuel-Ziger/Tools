@@ -91,6 +91,7 @@ main() {
     "p/popt/libpopt0_1.18-2_amd64.deb|main"
     "liba/libarchive/libarchive13_3.4.3-2+deb11u1_amd64.deb|main"
     "libb/libbsd/libbsd0_0.11.3-1+deb11u1_amd64.deb|main"
+    "libm/libmd/libmd0_1.0.3-3_amd64.deb|main"
     "libc/libcap2/libcap2_2.44-1_amd64.deb|main"
     "j/jansson/libjansson4_2.13.1-1.1_amd64.deb|main"
     "a/acl/libacl1_2.2.53-10_amd64.deb|main"
