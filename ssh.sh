@@ -27,10 +27,13 @@ if ! command -v script >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v sshpass >/dev/null 2>&1; then
-  echo "[!] comando 'sshpass' nao encontrado."
-  echo "[i] Instala com: sudo apt install sshpass"
-  exit 1
+SSH_METHOD=""
+if command -v sshpass >/dev/null 2>&1; then
+  SSH_METHOD="sshpass"
+elif command -v expect >/dev/null 2>&1; then
+  SSH_METHOD="expect"
+else
+  SSH_METHOD="manual"
 fi
 
 touch "${LOG_FILE}" 2>/dev/null || LOG_FILE="/tmp/ssh_pair_test_fallback_$(date +%F_%H%M%S).log"
@@ -42,6 +45,7 @@ touch "${LOG_FILE}" 2>/dev/null || {
 echo "[*] Target: ${TARGET}" | tee -a "${LOG_FILE}"
 echo "[*] SSH_BIN: ${SSH_BIN}" | tee -a "${LOG_FILE}"
 echo "[*] Log: ${LOG_FILE}" | tee -a "${LOG_FILE}"
+echo "[*] Metodo de autenticacao: ${SSH_METHOD}" | tee -a "${LOG_FILE}"
 echo "" | tee -a "${LOG_FILE}"
 
 for pair in "${PAIRS[@]}"; do
@@ -52,32 +56,68 @@ for pair in "${PAIRS[@]}"; do
   echo "[*] Testando ${user} (1:1)" | tee -a "${LOG_FILE}"
   echo "[i] Enviando senha automaticamente para ${user}" | tee -a "${LOG_FILE}"
 
+  if [[ "${SSH_METHOD}" == "manual" ]]; then
+    echo "[!] Nem 'sshpass' nem 'expect' encontrados." | tee -a "${LOG_FILE}"
+    echo "[i] Teste manual sugerido para ${user}:" | tee -a "${LOG_FILE}"
+    echo "    ${SSH_BIN} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no ${user}@${TARGET}" | tee -a "${LOG_FILE}"
+    echo "    senha: ${pass}" | tee -a "${LOG_FILE}"
+    echo "" | tee -a "${LOG_FILE}"
+    continue
+  fi
+
   # Usa 'script' para forcar pseudo-tty no ambiente atual.
   # Executa comando curto para validar autenticacao.
-  set +e
-  script -q -c "SSHPASS='${pass}' sshpass -e ${SSH_BIN} \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -o PreferredAuthentications=password \
-    -o PubkeyAuthentication=no \
-    -o ConnectTimeout=5 \
-    ${user}@${TARGET} 'whoami'" /dev/null >"${attempt_log}" 2>&1
-  rc=$?
-  set -e
-
-  cat "${attempt_log}" | tee -a "${LOG_FILE}" >/dev/null
-
-  if grep -qi "Permission denied" "${attempt_log}"; then
-    echo "[-] Falhou para ${user}" | tee -a "${LOG_FILE}"
-  elif [[ ${rc} -eq 0 ]]; then
-    echo "[+] Possivel sucesso para ${user}" | tee -a "${LOG_FILE}"
-    echo "[+] Abrindo sessao interativa..." | tee -a "${LOG_FILE}"
-    exec SSHPASS="${pass}" sshpass -e "${SSH_BIN}" \
+  if [[ "${SSH_METHOD}" == "sshpass" ]]; then
+    set +e
+    script -q -c "SSHPASS='${pass}' sshpass -e ${SSH_BIN} \
       -o StrictHostKeyChecking=no \
       -o UserKnownHostsFile=/dev/null \
       -o PreferredAuthentications=password \
       -o PubkeyAuthentication=no \
-      "${user}@${TARGET}"
+      -o ConnectTimeout=5 \
+      ${user}@${TARGET} 'whoami'" /dev/null >"${attempt_log}" 2>&1
+    rc=$?
+    set -e
+  else
+    set +e
+    script -q -c "expect -c '
+      log_user 1
+      set timeout 8
+      spawn ${SSH_BIN} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=5 ${user}@${TARGET} whoami
+      expect {
+        -re \"(?i)assword:\" { send \"${pass}\r\"; exp_continue }
+        -re \"Permission denied\" { exit 2 }
+        eof
+      }
+    '" /dev/null >"${attempt_log}" 2>&1
+    rc=$?
+    set -e
+  fi
+
+  tee -a "${LOG_FILE}" <"${attempt_log}" >/dev/null
+
+  if rg -i "Permission denied" "${attempt_log}" >/dev/null 2>&1; then
+    echo "[-] Falhou para ${user}" | tee -a "${LOG_FILE}"
+  elif [[ ${rc} -eq 0 ]]; then
+    echo "[+] Possivel sucesso para ${user}" | tee -a "${LOG_FILE}"
+    echo "[+] Abrindo sessao interativa..." | tee -a "${LOG_FILE}"
+    if [[ "${SSH_METHOD}" == "sshpass" ]]; then
+      exec SSHPASS="${pass}" sshpass -e "${SSH_BIN}" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o PreferredAuthentications=password \
+        -o PubkeyAuthentication=no \
+        "${user}@${TARGET}"
+    else
+      echo "[i] Como o metodo atual e 'expect', abrindo sessao manual para ${user}." | tee -a "${LOG_FILE}"
+      echo "[i] Senha: ${pass}" | tee -a "${LOG_FILE}"
+      exec "${SSH_BIN}" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o PreferredAuthentications=password \
+        -o PubkeyAuthentication=no \
+        "${user}@${TARGET}"
+    fi
   else
     echo "[!] Resultado inconclusivo para ${user} (rc=${rc})" | tee -a "${LOG_FILE}"
   fi
