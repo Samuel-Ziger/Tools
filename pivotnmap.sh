@@ -89,6 +89,10 @@ main() {
     fi
   done
 
+  log "Remontando ${NMAP_ROOT} (arvore limpa; evita extracao antiga incompleta) ..."
+  rm -rf "${NMAP_ROOT}"
+  mkdir -p "${NMAP_ROOT}"
+
   log "Extraindo .deb para ${NMAP_ROOT} (userland) ..."
   shopt -s nullglob
   for deb in "${DEB_DIR}"/*.deb; do
@@ -97,30 +101,55 @@ main() {
     }
   done
 
-  export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:${PATH}"
-  # libblas3 (lapack) instala em .../x86_64-linux-gnu/blas/ — sem isso o nmap nao acha libblas.so.3
-  export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/blas:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/engines-1.1:${NMAP_ROOT}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+  local libgnu="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu"
+  # Somente o bundle no teste (evita LD_LIBRARY_PATH herdado quebrado no alvo).
+  local NMAP_LD="${libgnu}:${libgnu}/blas:${libgnu}/engines-1.1:${NMAP_ROOT}/lib/x86_64-linux-gnu"
 
-  if "${NMAP_ROOT}/usr/bin/nmap" --version >/dev/null 2>&1; then
-    ok "nmap OK: $("${NMAP_ROOT}/usr/bin/nmap" --version | head -1)"
+  if [[ ! -e "${libgnu}/libpcap.so.0.8" && ! -e "${libgnu}/libpcap.so.1.10.0" ]]; then
+    warn "libpcap ausente apos extracao (esperado em ${libgnu}). Listando:"
+    ls -la "${libgnu}" 2>/dev/null | head -30 || true
+    _bail "Pacote libpcap0.8 nao apareceu no prefixo. Apague /tmp/nmap-debs/*.deb e rode de novo se os .deb estiverem corrompidos."
+  fi
+
+  export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:${PATH}"
+  # libblas3 (lapack) instala em .../blas/
+  export LD_LIBRARY_PATH="${NMAP_LD}:${LD_LIBRARY_PATH:-}"
+
+  local nmap_bin="${NMAP_ROOT}/usr/bin/nmap"
+  if env LD_LIBRARY_PATH="${NMAP_LD}" PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:${PATH}" "${nmap_bin}" --version >/dev/null 2>&1; then
+    ok "nmap OK: $(env LD_LIBRARY_PATH="${NMAP_LD}" PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:${PATH}" "${nmap_bin}" --version | head -1)"
   else
     warn "Binario presente mas nmap --version falhou (falta lib?)."
-    "${NMAP_ROOT}/usr/bin/nmap" --version || true
+    env LD_LIBRARY_PATH="${NMAP_LD}" PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:${PATH}" "${nmap_bin}" --version || true
     _bail "nmap nao executavel."
   fi
 
+  # Launcher: funciona mesmo depois de apenas `bash` no script (sem source).
+  local launcher="${NMAP_ROOT}/nmap-pivot.sh"
+  cat >"${launcher}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export NMAP_ROOT="${NMAP_ROOT}"
+export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:\${PATH}"
+export LD_LIBRARY_PATH="${NMAP_LD}:\${LD_LIBRARY_PATH:-}"
+exec "${nmap_bin}" "\$@"
+EOF
+  chmod 755 "${launcher}"
+  ok "Launcher (use sem precisar source): bash ${launcher} --version"
+
   cat <<EOF
 
-[+] Ambiente (copie no shell do alvo):
+[+] IMPORTANTE:
+    - Rodar só "bash ${_SCRIPT_PATH##*/}" NAO deixa o nmap no teu shell (subprocesso).
+    - Opcao A — carregar no shell atual:
+        source ${_SCRIPT_PATH}
+    - Opcao B — sem poluir PATH (recomendado):
+        bash ${launcher} -Pn -p 22,80,443 --open 127.0.0.1
+
+[+] Se copiar exports manualmente, use "export" (nao "xport") numa linha so, ex.:
     export NMAP_ROOT=${NMAP_ROOT}
     export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:\$PATH"
-    export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/blas:${NMAP_ROOT}/usr/lib/x86_64-linux-gnu/engines-1.1:${NMAP_ROOT}/lib/x86_64-linux-gnu:\${LD_LIBRARY_PATH:-}"
-
-[+] Teste rapido:
-    nmap -Pn -p 22,80,443 --open 127.0.0.1
-
-[+] Ou mantenha no shell atual:
-    source ${_SCRIPT_PATH}
+    export LD_LIBRARY_PATH="${NMAP_LD}:\${LD_LIBRARY_PATH:-}"
 EOF
 }
 
