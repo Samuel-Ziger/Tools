@@ -32,6 +32,8 @@ if command -v sshpass >/dev/null 2>&1; then
   SSH_METHOD="sshpass"
 elif command -v expect >/dev/null 2>&1; then
   SSH_METHOD="expect"
+elif command -v setsid >/dev/null 2>&1; then
+  SSH_METHOD="askpass"
 else
   SSH_METHOD="manual"
 fi
@@ -78,7 +80,7 @@ for pair in "${PAIRS[@]}"; do
       ${user}@${TARGET} 'whoami'" /dev/null >"${attempt_log}" 2>&1
     rc=$?
     set -e
-  else
+  elif [[ "${SSH_METHOD}" == "expect" ]]; then
     set +e
     script -q -c "expect -c '
       log_user 1
@@ -92,11 +94,37 @@ for pair in "${PAIRS[@]}"; do
     '" /dev/null >"${attempt_log}" 2>&1
     rc=$?
     set -e
+  elif [[ "${SSH_METHOD}" == "askpass" ]]; then
+    askpass_script="/tmp/.askpass_${user}_$$.sh"
+    cat >"${askpass_script}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' '${pass}'
+EOF
+    chmod 700 "${askpass_script}"
+
+    set +e
+    DISPLAY=:0 SSH_ASKPASS="${askpass_script}" SSH_ASKPASS_REQUIRE=force \
+      setsid "${SSH_BIN}" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o PreferredAuthentications=password \
+        -o PubkeyAuthentication=no \
+        -o NumberOfPasswordPrompts=1 \
+        -o ConnectTimeout=5 \
+        "${user}@${TARGET}" "whoami" >"${attempt_log}" 2>&1
+    rc=$?
+    set -e
+
+    rm -f "${askpass_script}"
+  else
+    echo "[!] Metodo de autenticacao nao suportado: ${SSH_METHOD}" | tee -a "${LOG_FILE}"
+    rc=99
+    : >"${attempt_log}"
   fi
 
   tee -a "${LOG_FILE}" <"${attempt_log}" >/dev/null
 
-  if rg -i "Permission denied" "${attempt_log}" >/dev/null 2>&1; then
+  if grep -qi "Permission denied" "${attempt_log}"; then
     echo "[-] Falhou para ${user}" | tee -a "${LOG_FILE}"
   elif [[ ${rc} -eq 0 ]]; then
     echo "[+] Possivel sucesso para ${user}" | tee -a "${LOG_FILE}"
@@ -109,6 +137,23 @@ for pair in "${PAIRS[@]}"; do
         -o PubkeyAuthentication=no \
         "${user}@${TARGET}"
     else
+      if [[ "${SSH_METHOD}" == "askpass" ]]; then
+        askpass_script="/tmp/.askpass_${user}_$$.sh"
+        cat >"${askpass_script}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' '${pass}'
+EOF
+        chmod 700 "${askpass_script}"
+        echo "[i] Metodo 'askpass' detectado, abrindo sessao sem TTY interativo local." | tee -a "${LOG_FILE}"
+        exec env DISPLAY=:0 SSH_ASKPASS="${askpass_script}" SSH_ASKPASS_REQUIRE=force \
+          setsid "${SSH_BIN}" \
+            -tt \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            "${user}@${TARGET}"
+      fi
       echo "[i] Como o metodo atual e 'expect', abrindo sessao manual para ${user}." | tee -a "${LOG_FILE}"
       echo "[i] Senha: ${pass}" | tee -a "${LOG_FILE}"
       exec "${SSH_BIN}" \
