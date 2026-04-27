@@ -2,6 +2,9 @@
 # smbclient + rpcclient em userland (sem root): .deb Debian 11 amd64 + dpkg-deb -x.
 # Pensado para pivot onde o Kali nao ve a rede interna mas o alvo tem wget/curl.
 #
+# Se dpkg-deb falhar com liblzma.so.5 (XZ_*), o shell herdou LD_LIBRARY_PATH do
+# prefixo SMB: env -u LD_LIBRARY_PATH bash bootstrap_smb_tools_userland.sh
+#
 # Uso no alvo:
 #   bash bootstrap_smb_tools_userland.sh
 #   source /var/tmp/smb-me/smb-env.sh
@@ -161,13 +164,22 @@ main() {
     dpkg-deb -x "${path}" "${SMB_ROOT}" || _bail "Falha dpkg-deb -x ${path}"
   done
 
+  # Clientes Samba procuram /etc/samba/smb.conf no sistema; em userland nao existe.
+  mkdir -p "${SMB_ROOT}/etc/samba"
+  cat >"${SMB_ROOT}/etc/samba/smb.conf" <<'SMBCONF'
+# smb.conf minimo para smbclient/rpcclient em prefixo userland (sem root).
+[global]
+	workgroup = WORKGROUP
+	client min protocol = SMB2
+SMBCONF
+
   local libgnu="${SMB_ROOT}/usr/lib/x86_64-linux-gnu"
   local samba_priv="${libgnu}/samba"
   # libs internas (libpopt-samba3-cmdline, libcli-spoolss, ...) ficam em .../samba/
   local SMB_LD="${samba_priv}:${libgnu}:${SMB_ROOT}/lib/x86_64-linux-gnu"
 
   local smb_bin="${SMB_ROOT}/usr/bin/smbclient"
-  if ! env LD_LIBRARY_PATH="${SMB_LD}" "${smb_bin}" -V >/dev/null 2>&1; then
+  if ! env LD_LIBRARY_PATH="${SMB_LD}" "${smb_bin}" -s "${SMB_ROOT}/etc/samba/smb.conf" -V >/dev/null 2>&1; then
     warn "smbclient -V falhou. Tentativa de diagnostico (ldd):"
     env LD_LIBRARY_PATH="${SMB_LD}" ldd "${smb_bin}" 2>/dev/null | grep 'not found' || true
     _bail "Binario smbclient nao executavel com este LD_LIBRARY_PATH."
@@ -182,7 +194,15 @@ export PATH="${SMB_ROOT}/usr/bin:${SMB_ROOT}/usr/sbin:\${PATH}"
 export LD_LIBRARY_PATH="${SMB_LD}:\${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${SMB_ROOT}/usr"
 export PYTHONPATH="${SMB_ROOT}/usr/lib/python3/dist-packages"
-exec "\$@"
+SMBCONF="${SMB_ROOT}/etc/samba/smb.conf"
+case "\$(basename "\${1:-}")" in
+  smbclient|rpcclient|net|nmblookup)
+    exec "\$1" -s "\$SMBCONF" "\${@:2}"
+    ;;
+  *)
+    exec "\$@"
+  ;;
+esac
 EOF
   chmod 755 "${launcher}"
 
@@ -199,24 +219,25 @@ if [[ -z "${TARGET}" ]]; then
   exit 1
 fi
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+CONF="${ROOT}/etc/samba/smb.conf"
 export PATH="${ROOT}/usr/bin:${PATH}"
 export LD_LIBRARY_PATH="${ROOT}/usr/lib/x86_64-linux-gnu/samba:${ROOT}/usr/lib/x86_64-linux-gnu:${ROOT}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${ROOT}/usr"
 export PYTHONPATH="${ROOT}/usr/lib/python3/dist-packages"
 
 echo "=== smbclient -L //${TARGET} -N (anon) ==="
-smbclient -L "//${TARGET}" -N 2>&1 || true
+smbclient -s "${CONF}" -L "//${TARGET}" -N 2>&1 || true
 
 if [[ -n "${SMB_USER:-}" ]]; then
   echo "=== smbclient -L //${TARGET} -U ... (credencial) ==="
-  smbclient -L "//${TARGET}" -U "${SMB_USER}%${SMB_PASS:-}" 2>&1 || true
+  smbclient -s "${CONF}" -L "//${TARGET}" -U "${SMB_USER}%${SMB_PASS:-}" 2>&1 || true
 fi
 
 echo "=== rpcclient -U '' -N ${TARGET} -c 'srvinfo' ==="
-rpcclient -U '' -N "${TARGET}" -c 'srvinfo' 2>&1 || true
+rpcclient -s "${CONF}" -U '' -N "${TARGET}" -c 'srvinfo' 2>&1 || true
 
 echo "=== rpcclient -U '' -N ${TARGET} -c 'enumdomusers' ==="
-rpcclient -U '' -N "${TARGET}" -c 'enumdomusers' 2>&1 || true
+rpcclient -s "${CONF}" -U '' -N "${TARGET}" -c 'enumdomusers' 2>&1 || true
 AGENT
   chmod 755 "${agent}"
 
@@ -226,10 +247,14 @@ export PATH="${SMB_ROOT}/usr/bin:${SMB_ROOT}/usr/sbin:\${PATH}"
 export LD_LIBRARY_PATH="${SMB_LD}:\${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${SMB_ROOT}/usr"
 export PYTHONPATH="${SMB_ROOT}/usr/lib/python3/dist-packages"
+SMBCLIENT_CONF="${SMB_ROOT}/etc/samba/smb.conf"
+# Opcional (bash): apos source, smbclient/rpcclient usam -s automaticamente
+smbclient() { "${SMB_ROOT}/usr/bin/smbclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
+rpcclient() { "${SMB_ROOT}/usr/bin/rpcclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
 EOF
   chmod 644 "${SMB_ROOT}/smb-env.sh"
 
-  ok "smbclient: $(env LD_LIBRARY_PATH="${SMB_LD}" "${smb_bin}" -V | head -1)"
+  ok "smbclient: $(env LD_LIBRARY_PATH="${SMB_LD}" "${smb_bin}" -s "${SMB_ROOT}/etc/samba/smb.conf" -V | head -1)"
   ok "Launcher: bash ${launcher} smbclient -L //10.20.20.19 -N"
   ok "Agente:   bash ${agent} 10.20.20.19"
   ok "Ambiente: source ${SMB_ROOT}/smb-env.sh"
