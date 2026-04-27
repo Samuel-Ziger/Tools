@@ -20,8 +20,9 @@ _bail() {
 
 _SCRIPT_PATH="${BASH_SOURCE[0]}"
 
-NMAP_ROOT="${NMAP_ROOT:-/tmp/nmap-root}"
-DEB_DIR="${DEB_DIR:-/tmp/nmap-debs}"
+# Defaults (main() pode mudar NMAP_ROOT se /tmp/nmap-root nao for apagavel).
+: "${NMAP_ROOT:=/tmp/nmap-root}"
+: "${DEB_DIR:=/tmp/nmap-debs}"
 MIRROR="${MIRROR:-http://archive.debian.org/debian/pool/main}"
 
 log() { printf '[*] %s\n' "$*"; }
@@ -54,22 +55,20 @@ main() {
     _bail "dpkg-deb nao encontrado (pacote dpkg). Tente mini_nmap.sh com bash."
   fi
 
-  mkdir -p "${DEB_DIR}" "${NMAP_ROOT}"
+  mkdir -p "${DEB_DIR}"
   log "Cache de .deb: ${DEB_DIR}"
-  log "Prefixo de extracao: ${NMAP_ROOT}"
 
-  # Versoes alinhadas ao bullseye (mesmo conjunto que o apt listou no teu erro).
+  # Bullseye amd64 — sem dbus/libdbus (polui etc/ e systemd; nmap nao precisa para scan).
+  # So libpcre3 e libssh2-1 (o binario nmap liga a elas).
   local debs=(
-    "d/dbus/dbus_1.12.28-0+deb11u1_amd64.deb"
-    "a/apparmor/libapparmor1_2.13.6-10_amd64.deb"
     "l/lapack/libblas3_3.9.0-3+deb11u1_amd64.deb"
-    "d/dbus/libdbus-1-3_1.12.28-0+deb11u1_amd64.deb"
-    "e/expat/libexpat1_2.2.10-2+deb11u5_amd64.deb"
     "libl/liblinear/liblinear4_2.3.0+dfsg-5_amd64.deb"
     "l/lua5.3/liblua5.3-0_5.3.3-1.1+deb11u1_amd64.deb"
     "libp/libpcap/libpcap0.8_1.10.0-2_amd64.deb"
     "l/lua-lpeg/lua-lpeg_1.0.2-1_amd64.deb"
     "o/openssl/libssl1.1_1.1.1w-0+deb11u1_amd64.deb"
+    "p/pcre3/libpcre3_8.39-13_amd64.deb"
+    "libs/libssh2/libssh2-1_1.9.0-2+deb11u1_amd64.deb"
     "n/nmap/nmap-common_7.91+dfsg1+really7.80+dfsg1-2_all.deb"
     "n/nmap/nmap_7.91+dfsg1+really7.80+dfsg1-2_amd64.deb"
   )
@@ -89,15 +88,27 @@ main() {
     fi
   done
 
-  log "Remontando ${NMAP_ROOT} (arvore limpa; evita extracao antiga incompleta) ..."
-  rm -rf "${NMAP_ROOT}"
+  local _preferred="${NMAP_ROOT}"
+  log "Prefixo preferido: ${_preferred}"
+  NMAP_ROOT="${_preferred}"
+  if [[ -e "${NMAP_ROOT}" ]]; then
+    rm -rf "${NMAP_ROOT}" 2>/dev/null || true
+    if [[ -e "${NMAP_ROOT}" ]]; then
+      NMAP_ROOT="/tmp/nmap-ul-$( (command -v id >/dev/null 2>&1 && id -u) || echo 0)-$$"
+      warn "Nao deu para apagar ${_preferred} (arquivos de outro usuario/root?). Novo prefixo: ${NMAP_ROOT}"
+    fi
+  fi
   mkdir -p "${NMAP_ROOT}"
 
-  log "Extraindo .deb para ${NMAP_ROOT} (userland) ..."
-  shopt -s nullglob
-  for deb in "${DEB_DIR}"/*.deb; do
-    dpkg-deb -x "${deb}" "${NMAP_ROOT}" || {
-      _bail "Falha ao extrair: ${deb}"
+  log "Extraindo apenas os .deb da lista (ignora dbus antigo em ${DEB_DIR}) ..."
+  for rel in "${debs[@]}"; do
+    name="${rel##*/}"
+    path="${DEB_DIR}/${name}"
+    if [[ ! -s "${path}" ]]; then
+      _bail "Falta .deb: ${path}"
+    fi
+    dpkg-deb -x "${path}" "${NMAP_ROOT}" || {
+      _bail "Falha ao extrair: ${path}"
     }
   done
 
