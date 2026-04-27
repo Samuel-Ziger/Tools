@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
 SSH_BIN="${SSH_BIN:-/tmp/openssh-root/usr/bin/ssh}"
