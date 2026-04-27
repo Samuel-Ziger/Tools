@@ -244,13 +244,15 @@ AGENT
   cat >"${SMB_ROOT}/smb-env.sh" <<EOF
 export SMB_ROOT="${SMB_ROOT}"
 export PATH="${SMB_ROOT}/usr/bin:${SMB_ROOT}/usr/sbin:\${PATH}"
-export LD_LIBRARY_PATH="${SMB_LD}:\${LD_LIBRARY_PATH:-}"
+# Ordem: .../samba primeiro (libs internas libpopt-samba3-cmdline, etc.)
+export SMB_LD="${SMB_LD}"
+export LD_LIBRARY_PATH="\${SMB_LD}:\${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${SMB_ROOT}/usr"
 export PYTHONPATH="${SMB_ROOT}/usr/lib/python3/dist-packages"
 SMBCLIENT_CONF="${SMB_ROOT}/etc/samba/smb.conf"
-# Opcional (bash): apos source, smbclient/rpcclient usam -s automaticamente
-smbclient() { "${SMB_ROOT}/usr/bin/smbclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
-rpcclient() { "${SMB_ROOT}/usr/bin/rpcclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
+# Funcoes: injectam LD + -s (evita falha se LD foi limpo ou smb-env antigo sem .../samba)
+smbclient() { env LD_LIBRARY_PATH="\${SMB_LD}:\${LD_LIBRARY_PATH:-}" "${SMB_ROOT}/usr/bin/smbclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
+rpcclient() { env LD_LIBRARY_PATH="\${SMB_LD}:\${LD_LIBRARY_PATH:-}" "${SMB_ROOT}/usr/bin/rpcclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
 EOF
   chmod 644 "${SMB_ROOT}/smb-env.sh"
 
