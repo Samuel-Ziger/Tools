@@ -185,24 +185,41 @@ SMBCONF
     _bail "Binario smbclient nao executavel com este LD_LIBRARY_PATH."
   fi
 
+  # Wrappers no PATH *antes* de usr/bin: o nome "smbclient" resolve para LD + -s sem depender de funcoes bash
+  # nem de pivotsmb.sh antigo (PATH com usr/bin primeiro chamava o ELF directo e falhava em libpopt-samba3-cmdline).
+  local pivot_bin="${SMB_ROOT}/samba-pivot-bin"
+  mkdir -p "${pivot_bin}"
+  local _conf="${SMB_ROOT}/etc/samba/smb.conf"
+  local _ld_q
+  _ld_q=$(printf '%s' "${SMB_LD}" | sed "s/'/'\\\\''/g")
+  for _name in smbclient rpcclient net; do
+    cat >"${pivot_bin}/${_name}" <<EOF
+#!/bin/sh
+# Nao usar "env" nem shebang "env bash": PATH minimo (pivot) pode nao incluir /usr/bin.
+LD_LIBRARY_PATH='${_ld_q}'"\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH
+exec '${SMB_ROOT}/usr/bin/${_name}' -s '${_conf}' "\$@"
+EOF
+    chmod 755 "${pivot_bin}/${_name}"
+  done
+  cat >"${pivot_bin}/nmblookup" <<EOF
+#!/bin/sh
+LD_LIBRARY_PATH='${_ld_q}'"\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH
+exec '${SMB_ROOT}/usr/bin/nmblookup' "\$@"
+EOF
+  chmod 755 "${pivot_bin}/nmblookup"
+
   local launcher="${SMB_ROOT}/smb-pivot.sh"
   cat >"${launcher}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 export SMB_ROOT="${SMB_ROOT}"
-export PATH="${SMB_ROOT}/usr/bin:${SMB_ROOT}/usr/sbin:\${PATH}"
+export PATH="${SMB_ROOT}/samba-pivot-bin:${SMB_ROOT}/usr/bin:${SMB_ROOT}/usr/sbin:\${PATH}"
 export LD_LIBRARY_PATH="${SMB_LD}:\${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${SMB_ROOT}/usr"
 export PYTHONPATH="${SMB_ROOT}/usr/lib/python3/dist-packages"
-SMBCONF="${SMB_ROOT}/etc/samba/smb.conf"
-case "\$(basename "\${1:-}")" in
-  smbclient|rpcclient|net|nmblookup)
-    exec "\$1" -s "\$SMBCONF" "\${@:2}"
-    ;;
-  *)
-    exec "\$@"
-  ;;
-esac
+exec "\$@"
 EOF
   chmod 755 "${launcher}"
 
@@ -219,45 +236,42 @@ if [[ -z "${TARGET}" ]]; then
   exit 1
 fi
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-CONF="${ROOT}/etc/samba/smb.conf"
-export PATH="${ROOT}/usr/bin:${PATH}"
+export PATH="${ROOT}/samba-pivot-bin:${ROOT}/usr/bin:${PATH}"
 export LD_LIBRARY_PATH="${ROOT}/usr/lib/x86_64-linux-gnu/samba:${ROOT}/usr/lib/x86_64-linux-gnu:${ROOT}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${ROOT}/usr"
 export PYTHONPATH="${ROOT}/usr/lib/python3/dist-packages"
 
 echo "=== smbclient -L //${TARGET} -N (anon) ==="
-smbclient -s "${CONF}" -L "//${TARGET}" -N 2>&1 || true
+smbclient -L "//${TARGET}" -N 2>&1 || true
 
 if [[ -n "${SMB_USER:-}" ]]; then
   echo "=== smbclient -L //${TARGET} -U ... (credencial) ==="
-  smbclient -s "${CONF}" -L "//${TARGET}" -U "${SMB_USER}%${SMB_PASS:-}" 2>&1 || true
+  smbclient -L "//${TARGET}" -U "${SMB_USER}%${SMB_PASS:-}" 2>&1 || true
 fi
 
 echo "=== rpcclient -U '' -N ${TARGET} -c 'srvinfo' ==="
-rpcclient -s "${CONF}" -U '' -N "${TARGET}" -c 'srvinfo' 2>&1 || true
+rpcclient -U '' -N "${TARGET}" -c 'srvinfo' 2>&1 || true
 
 echo "=== rpcclient -U '' -N ${TARGET} -c 'enumdomusers' ==="
-rpcclient -s "${CONF}" -U '' -N "${TARGET}" -c 'enumdomusers' 2>&1 || true
+rpcclient -U '' -N "${TARGET}" -c 'enumdomusers' 2>&1 || true
 AGENT
   chmod 755 "${agent}"
 
   cat >"${SMB_ROOT}/smb-env.sh" <<EOF
 export SMB_ROOT="${SMB_ROOT}"
-export PATH="${SMB_ROOT}/usr/bin:${SMB_ROOT}/usr/sbin:\${PATH}"
-# Ordem: .../samba primeiro (libs internas libpopt-samba3-cmdline, etc.)
+# samba-pivot-bin primeiro: wrappers smbclient/rpcclient com LD + -s (nao usar usr/bin/smbclient directo).
+export PATH="${SMB_ROOT}/samba-pivot-bin:${SMB_ROOT}/usr/bin:${SMB_ROOT}/usr/sbin:\${PATH}"
 export SMB_LD="${SMB_LD}"
 export LD_LIBRARY_PATH="\${SMB_LD}:\${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${SMB_ROOT}/usr"
 export PYTHONPATH="${SMB_ROOT}/usr/lib/python3/dist-packages"
 SMBCLIENT_CONF="${SMB_ROOT}/etc/samba/smb.conf"
-# Funcoes: injectam LD + -s (evita falha se LD foi limpo ou smb-env antigo sem .../samba)
-smbclient() { env LD_LIBRARY_PATH="\${SMB_LD}:\${LD_LIBRARY_PATH:-}" "${SMB_ROOT}/usr/bin/smbclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
-rpcclient() { env LD_LIBRARY_PATH="\${SMB_LD}:\${LD_LIBRARY_PATH:-}" "${SMB_ROOT}/usr/bin/rpcclient" -s "${SMB_ROOT}/etc/samba/smb.conf" "\$@"; }
 EOF
   chmod 644 "${SMB_ROOT}/smb-env.sh"
 
   ok "smbclient: $(env LD_LIBRARY_PATH="${SMB_LD}" "${smb_bin}" -s "${SMB_ROOT}/etc/samba/smb.conf" -V | head -1)"
   ok "Launcher: bash ${launcher} smbclient -L //10.20.20.19 -N"
+  ok "Wrappers: ${pivot_bin}/smbclient (use apos source smb-env.sh ou PATH)"
   ok "Agente:   bash ${agent} 10.20.20.19"
   ok "Ambiente: source ${SMB_ROOT}/smb-env.sh"
 
