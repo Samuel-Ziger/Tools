@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # smbclient + rpcclient em userland (sem root): .deb Debian 11 amd64 + dpkg-deb -x.
 # Pensado para pivot onde o Kali nao ve a rede interna mas o alvo tem wget/curl.
-#
+#teste
 # Se dpkg-deb falhar com liblzma.so.5 (XZ_*), o shell herdou LD_LIBRARY_PATH do
 # prefixo SMB: env -u LD_LIBRARY_PATH bash bootstrap_smb_tools_userland.sh
 #
-# Uso no alvo:
+# Uso no alvo (recomendado: caminho completo ao wrapper — sem source PATH/hash):
 #   bash bootstrap_smb_tools_userland.sh
-#   source /var/tmp/smb-me/smb-env.sh
-#   smbclient -L //10.20.20.19 -N
-#   rpcclient -U '' -N 10.20.20.19 -c 'enumdomusers'
+#   /var/tmp/smb-me/samba-pivot-bin/smbclient -L //10.20.20.19 -N
+#   /var/tmp/smb-me/samba-pivot-bin/smbclient //10.20.20.19/Shares -N
+#   /var/tmp/smb-me/samba-pivot-bin/rpcclient -U '' -N 10.20.20.19 -c 'srvinfo'
 #
+# Opcional: source /var/tmp/smb-me/smb-env.sh  # PATH + hash -r; ou use sempre .../samba-pivot-bin/smbclient
 # Opcional: SMB_ROOT=/var/tmp/smb-me-outro bash bootstrap_smb_tools_userland.sh
 
 set -u
@@ -274,16 +275,15 @@ EOF
   chmod 644 "${SMB_ROOT}/smb-env.sh"
 
   ok "smbclient: $(env LD_LIBRARY_PATH="${SMB_LD}" "${smb_bin}" -s "${SMB_ROOT}/etc/samba/smb.conf" -V | head -1)"
-  ok "Launcher: bash ${launcher} smbclient -L //10.20.20.19 -N"
-  ok "Wrappers: ${pivot_bin}/smbclient (use apos source smb-env.sh ou PATH)"
-  ok "Agente:   bash ${agent} 10.20.20.19"
-  ok "Ambiente: source ${SMB_ROOT}/smb-env.sh"
+  ok "Uso simples: ${pivot_bin}/smbclient //ALVO/Share -N"
+  ok "Launcher:  bash ${launcher} smbclient -L //10.20.20.19 -N"
+  ok "Agente:    bash ${agent} 10.20.20.19"
+  ok "Opcional:  source ${SMB_ROOT}/smb-env.sh   # PATH + hash -r; senao use sempre .../samba-pivot-bin/smbclient"
 
   cat <<EOF
 
 [!] AVISO: Binarios sao amd64 Bullseye (glibc ~2.31). Em Alpine/musl ou glibc antigo, nao vao correr.
 [!] Se faltar alguma .so, acrescente o .deb correspondente ao array em ${_SCRIPT_PATH##*/} e reextraia.
-[!] Se "smbclient" ainda apontar a usr/bin apos source: hash -r   (ou abrir novo shell)
 
 EOF
 }
