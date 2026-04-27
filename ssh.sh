@@ -27,6 +27,12 @@ if ! command -v script >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v sshpass >/dev/null 2>&1; then
+  echo "[!] comando 'sshpass' nao encontrado."
+  echo "[i] Instala com: sudo apt install sshpass"
+  exit 1
+fi
+
 touch "${LOG_FILE}" 2>/dev/null || LOG_FILE="/tmp/ssh_pair_test_fallback_$(date +%F_%H%M%S).log"
 touch "${LOG_FILE}" 2>/dev/null || {
   echo "[!] Sem permissao para criar log. Vai rodar sem log em arquivo."
@@ -41,36 +47,42 @@ echo "" | tee -a "${LOG_FILE}"
 for pair in "${PAIRS[@]}"; do
   user="${pair%%:*}"
   pass="${pair#*:}"
+  attempt_log="/tmp/ssh_pair_attempt_${user}_$$.log"
 
   echo "[*] Testando ${user} (1:1)" | tee -a "${LOG_FILE}"
-  echo "[i] Quando pedir senha, usa: ${pass}" | tee -a "${LOG_FILE}"
+  echo "[i] Enviando senha automaticamente para ${user}" | tee -a "${LOG_FILE}"
 
   # Usa 'script' para forcar pseudo-tty no ambiente atual.
   # Executa comando curto para validar autenticacao.
   set +e
-  script -q -c "${SSH_BIN} \
+  script -q -c "SSHPASS='${pass}' sshpass -e ${SSH_BIN} \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o PreferredAuthentications=password \
     -o PubkeyAuthentication=no \
     -o ConnectTimeout=5 \
-    ${user}@${TARGET} 'whoami'" /dev/null | tee -a "${LOG_FILE}"
+    ${user}@${TARGET} 'whoami'" /dev/null >"${attempt_log}" 2>&1
   rc=$?
   set -e
 
-  if grep -qi "Permission denied" "${LOG_FILE}"; then
+  cat "${attempt_log}" | tee -a "${LOG_FILE}" >/dev/null
+
+  if grep -qi "Permission denied" "${attempt_log}"; then
     echo "[-] Falhou para ${user}" | tee -a "${LOG_FILE}"
   elif [[ ${rc} -eq 0 ]]; then
     echo "[+] Possivel sucesso para ${user}" | tee -a "${LOG_FILE}"
     echo "[+] Abrindo sessao interativa..." | tee -a "${LOG_FILE}"
-    exec "${SSH_BIN}" \
+    exec SSHPASS="${pass}" sshpass -e "${SSH_BIN}" \
       -o StrictHostKeyChecking=no \
       -o UserKnownHostsFile=/dev/null \
+      -o PreferredAuthentications=password \
+      -o PubkeyAuthentication=no \
       "${user}@${TARGET}"
   else
     echo "[!] Resultado inconclusivo para ${user} (rc=${rc})" | tee -a "${LOG_FILE}"
   fi
 
+  rm -f "${attempt_log}"
   echo "" | tee -a "${LOG_FILE}"
 done
 
