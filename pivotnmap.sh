@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Nmap em userland (sem root): baixa .deb do Debian bullseye em /tmp e extrai
+# com dpkg-deb -x (nao passa por dpkg install no sistema).
+#
+# Uso no alvo (shell sem sudo):
+#   bash bootstrap_nmap_userland.sh
+#   source bootstrap_nmap_userland.sh   # mantem PATH/LD_LIBRARY_PATH no shell atual
+#
+# Se o apt anterior deixou cache em /var/cache/apt/archives sem permissao de apagar,
+# ignore os erros de rm — este script nao usa esse diretorio.
+
+set -u
+
+# Ao ser "source", nao usar exit (mata o shell do operador).
+_is_sourced() { [[ "${BASH_SOURCE[0]}" != "${0}" ]]; }
+_bail() {
+  warn "$*"
+  if _is_sourced; then return 1; else exit 1; fi
+}
+
+_SCRIPT_PATH="${BASH_SOURCE[0]}"
+
+NMAP_ROOT="${NMAP_ROOT:-/tmp/nmap-root}"
+DEB_DIR="${DEB_DIR:-/tmp/nmap-debs}"
+MIRROR="${MIRROR:-http://archive.debian.org/debian/pool/main}"
+
+log() { printf '[*] %s\n' "$*"; }
+ok()  { printf '[+] %s\n' "$*"; }
+warn(){ printf '[!] %s\n' "$*"; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+fetch() {
+  local url="$1"
+  local out="$2"
+  if need_cmd wget; then
+    wget -q -c -O "${out}" "${url}" && return 0
+    warn "wget falhou para: ${url}"
+    return 1
+  fi
+  if need_cmd curl; then
+    curl -fsSL -o "${out}" "${url}" && return 0
+    warn "curl falhou para: ${url}"
+    return 1
+  fi
+  warn "Sem wget/curl para baixar: ${url}"
+  return 1
+}
+
+main() {
+  if ! need_cmd dpkg-deb; then
+    _bail "dpkg-deb nao encontrado (pacote dpkg). Tente mini_nmap.sh com bash."
+  fi
+
+  mkdir -p "${DEB_DIR}" "${NMAP_ROOT}"
+  log "Cache de .deb: ${DEB_DIR}"
+  log "Prefixo de extracao: ${NMAP_ROOT}"
+
+  # Versoes alinhadas ao bullseye (mesmo conjunto que o apt listou no teu erro).
+  local debs=(
+    "d/dbus/dbus_1.12.28-0+deb11u1_amd64.deb"
+    "a/apparmor/libapparmor1_2.13.6-10_amd64.deb"
+    "l/lapack/libblas3_3.9.0-3+deb11u1_amd64.deb"
+    "d/dbus/libdbus-1-3_1.12.28-0+deb11u1_amd64.deb"
+    "e/expat/libexpat1_2.2.10-2+deb11u5_amd64.deb"
+    "libl/liblinear/liblinear4_2.3.0+dfsg-5_amd64.deb"
+    "l/lua5.3/liblua5.3-0_5.3.3-1.1+deb11u1_amd64.deb"
+    "libp/libpcap/libpcap0.8_1.10.0-2_amd64.deb"
+    "l/lua-lpeg/lua-lpeg_1.0.2-1_amd64.deb"
+    "o/openssl/libssl1.1_1.1.1w-0+deb11u1_amd64.deb"
+    "n/nmap/nmap-common_7.91+dfsg1+really7.80+dfsg1-2_all.deb"
+    "n/nmap/nmap_7.91+dfsg1+really7.80+dfsg1-2_amd64.deb"
+  )
+
+  local rel name path url
+  for rel in "${debs[@]}"; do
+    name="${rel##*/}"
+    path="${DEB_DIR}/${name}"
+    url="${MIRROR}/${rel}"
+    if [[ -s "${path}" ]]; then
+      log "Ja existe: ${name}"
+      continue
+    fi
+    log "Baixando ${name} ..."
+    if ! fetch "${url}" "${path}"; then
+      _bail "Falha no download. Verifique rede/MIRROR ou firewall do alvo."
+    fi
+  done
+
+  log "Extraindo .deb para ${NMAP_ROOT} (userland) ..."
+  shopt -s nullglob
+  for deb in "${DEB_DIR}"/*.deb; do
+    dpkg-deb -x "${deb}" "${NMAP_ROOT}" || {
+      _bail "Falha ao extrair: ${deb}"
+    }
+  done
+
+  export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:${PATH}"
+  export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+
+  if "${NMAP_ROOT}/usr/bin/nmap" --version >/dev/null 2>&1; then
+    ok "nmap OK: $("${NMAP_ROOT}/usr/bin/nmap" --version | head -1)"
+  else
+    warn "Binario presente mas nmap --version falhou (falta lib?)."
+    "${NMAP_ROOT}/usr/bin/nmap" --version || true
+    _bail "nmap nao executavel."
+  fi
+
+  cat <<EOF
+
+[+] Ambiente (copie no shell do alvo):
+    export NMAP_ROOT=${NMAP_ROOT}
+    export PATH="${NMAP_ROOT}/usr/bin:${NMAP_ROOT}/usr/sbin:\$PATH"
+    export LD_LIBRARY_PATH="${NMAP_ROOT}/usr/lib/x86_64-linux-gnu:${NMAP_ROOT}/lib/x86_64-linux-gnu:\${LD_LIBRARY_PATH:-}"
+
+[+] Teste rapido:
+    nmap -Pn -p 22,80,443 --open 127.0.0.1
+
+[+] Ou mantenha no shell atual:
+    source ${_SCRIPT_PATH}
+EOF
+}
+
+main "$@"
+ret=$?
+if _is_sourced; then
+  return "${ret}"
+fi
+exit "${ret}"
