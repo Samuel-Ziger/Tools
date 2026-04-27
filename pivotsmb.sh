@@ -266,6 +266,10 @@ export LD_LIBRARY_PATH="\${SMB_LD}:\${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="${SMB_ROOT}/usr"
 export PYTHONPATH="${SMB_ROOT}/usr/lib/python3/dist-packages"
 SMBCLIENT_CONF="${SMB_ROOT}/etc/samba/smb.conf"
+# Bash memoriza o caminho de "smbclient" (hash); se antes era usr/bin/ELF, ignora o novo PATH.
+if [[ -n "\${BASH_VERSION:-}" ]]; then
+  hash -r 2>/dev/null || true
+fi
 EOF
   chmod 644 "${SMB_ROOT}/smb-env.sh"
 
@@ -279,6 +283,7 @@ EOF
 
 [!] AVISO: Binarios sao amd64 Bullseye (glibc ~2.31). Em Alpine/musl ou glibc antigo, nao vao correr.
 [!] Se faltar alguma .so, acrescente o .deb correspondente ao array em ${_SCRIPT_PATH##*/} e reextraia.
+[!] Se "smbclient" ainda apontar a usr/bin apos source: hash -r   (ou abrir novo shell)
 
 EOF
 }
