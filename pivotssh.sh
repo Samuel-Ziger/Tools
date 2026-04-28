@@ -172,7 +172,13 @@ EOF
   local _wrap_dest="${SSH_ROOT}/ssh_askpass_wrap.sh"
   local _wrap_src=""
   local _wrap_copied=0
-  _wrap_src="$(cd "$(dirname "${_SCRIPT_PATH}")" && pwd)/ssh_askpass_wrap.sh"
+  local _wrap_dir
+  _wrap_dir="$(cd "$(dirname "${_SCRIPT_PATH}")" && pwd)"
+  # Com "bash pivotssh.sh" desde /, dirname e "." e pwd e "/" — evitar //ssh_askpass_wrap.sh
+  case "${_wrap_dir}" in
+    /) _wrap_src="/ssh_askpass_wrap.sh" ;;
+    *) _wrap_src="${_wrap_dir}/ssh_askpass_wrap.sh" ;;
+  esac
   if [[ -f "${_wrap_src}" ]]; then
     if grep -q '_resolve_ssh()' "${_wrap_src}" 2>/dev/null && ! grep -q 'OPENSSH_CLIENT_REL' "${_wrap_src}" 2>/dev/null; then
       cp -f "${_wrap_src}" "${_wrap_dest}" 2>/dev/null && _wrap_copied=1
