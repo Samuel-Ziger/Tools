@@ -4,7 +4,7 @@
 # CREDS_FILE (opcional) acrescenta pares user:pass exactos no fim de cada host.
 # Apos a primeira senha certa para user@host, interrompe as restantes senhas desse user
 # (evita linhas "falhou" confusas e ligacoes SSH inuteis).
-#teste
+#
 # Uso:
 #   bash ssh_sweep.sh
 #   bash ssh_sweep.sh 192.168.80.1 10.20.20.57 10.20.20.1
@@ -83,6 +83,33 @@ declare -a SSH_PASSWORDS=(
   "minecraft123"
   "42W#wskb-62wA\$sc"
   "pujkFGC471-2j"
+  "nick3saturno8"
+  "nick1terra0"
+  "nick5mercurio#8"
+  "nick4netuno7"
+  "nick2venus2"
+  "nick4terra\$7"
+  "nick2terra1"
+  "nick5jupiter-7"
+  "nick0mercurio!5"
+  "nick3saturno9"
+  "nick1jupiter*2"
+  "nick4venus7"
+  "nick7marte!3"
+  "nick6urano2"
+  "nick5saturno5"
+  "nick1netuno-0"
+  "nick0marte0"
+  "nick9jupiter-4"
+  "nick3urano\$7"
+  "nick7terra!7"
+  "nick4jupiter-8"
+  "nick2saturno!6"
+  "nick4urano*4"
+  "nick6netuno7"
+  "nick1netuno\$2"
+  "424242"
+  "crazycat"
 )
 
 declare -a CREDS_PAIRS=()
