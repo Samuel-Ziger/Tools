@@ -3,7 +3,7 @@
 # Uso:
 #   bash tomcat_manager_bruteforce.sh
 #   bash tomcat_manager_bruteforce.sh --url http://127.0.0.1:8080/manager/html
-
+#teste
 set -euo pipefail
 
 URL="http://127.0.0.1:8080/manager/html"
