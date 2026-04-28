@@ -166,13 +166,21 @@ fi
 EOF
   chmod 644 "${SSH_ROOT}/ssh-env.sh"
 
+  # So copiamos ssh_askpass_wrap.sh ao lado do bootstrap se for MESMO o wrapper (~100 linhas).
+  # Se alguem gravou o Pivotssh em cima de ssh_askpass_wrap.sh (mesmo conteudo OPENSSH_CLIENT_REL),
+  # o cp estragava ${SSH_ROOT}/ssh_askpass_wrap.sh — ignorar e usar o heredoc embutido.
   local _wrap_dest="${SSH_ROOT}/ssh_askpass_wrap.sh"
   local _wrap_src=""
+  local _wrap_copied=0
   _wrap_src="$(cd "$(dirname "${_SCRIPT_PATH}")" && pwd)/ssh_askpass_wrap.sh"
   if [[ -f "${_wrap_src}" ]]; then
-    cp -f "${_wrap_src}" "${_wrap_dest}" 2>/dev/null || true
+    if grep -q '_resolve_ssh()' "${_wrap_src}" 2>/dev/null && ! grep -q 'OPENSSH_CLIENT_REL' "${_wrap_src}" 2>/dev/null; then
+      cp -f "${_wrap_src}" "${_wrap_dest}" 2>/dev/null && _wrap_copied=1
+    else
+      warn "Ignorando ${_wrap_src} (parece Pivotssh/bootstrap, nao o wrapper). A instalar wrapper embutido."
+    fi
   fi
-  if ! [[ -s "${_wrap_dest}" ]]; then
+  if [[ "${_wrap_copied}" -eq 0 ]]; then
     cat >"${_wrap_dest}" <<'SSHWRAP'
 #!/usr/bin/env bash
 # Wrapper: ssh com password sem TTY (SSH_ASKPASS + setsid), como no ssh_sweep.
