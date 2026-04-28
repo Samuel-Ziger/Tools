@@ -294,6 +294,8 @@ SSHWRAP
 
 [!] Se o script mudou o prefixo (ex.: nao deu para apagar /tmp/openssh-root), o SSH_ROOT da
     tua shell NAO foi actualizado — usa o "Prefixo:" acima, NAO source "\$SSH_ROOT/ssh-env.sh".
+[!] Senha com '!': bash interactivo expande historico; use printf '%s' 'SENHA' > /tmp/.p
+    (abre e fecha aspas simples em volta da senha) ou: set +H  antes do printf.
 [!] amd64 Bullseye (glibc ~2.31). Em musl ou glibc antigo, nao corre.
 [!] Nao mistures extraccao manual repetida no mesmo directorio: apaga o prefixo ou usa SSH_ROOT novo.
 [!] Se algum .deb 404, actualiza o array em ${_SCRIPT_PATH##*/} ou OPENSSH_CLIENT_REL.
