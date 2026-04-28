@@ -1,138 +1,174 @@
 #!/usr/bin/env bash
-# Bootstrap de cliente SSH em container Debian bullseye "quebrado":
-# - Ajusta sources para archive.debian.org
-# - Faz apt update com flags inseguras (lab/CTF)
-# - Tenta instalar openssh-client
-# - Se dpkg falhar, extrai .deb manualmente para /tmp/openssh-root
-# - Exporta PATH/LD_LIBRARY_PATH e testa ssh -V
+# Cliente OpenSSH (ssh, scp, sftp) em userland: so wget/curl + dpkg-deb -x.
+# Nao usa apt nem escreve em /etc/apt (pivot sem root).
 #
-# Uso:
-#   bash bootstrap_ssh_pivot.sh
-#   bash bootstrap_ssh_pivot.sh --test-login nickj 192.168.80.1
+# Evita o erro do "Pivotssh.sh" com tar: destino e apagado antes de extrair
+# (arvore antiga em /tmp/openssh-root causa "File exists" / "Cannot utime").
 #
-# Nota:
-#   Este script imprime comandos para "source" no shell atual
-#   para manter PATH/LD_LIBRARY_PATH após execução.
+# Se dpkg-deb falhar por libs herdadas do SMB, rode:
+#   env -u LD_LIBRARY_PATH bash bootstrap_openssh_client_userland.sh
+#
+# Uso no alvo:
+#   bash bootstrap_openssh_client_userland.sh
+#   source /var/tmp/openssh-me/ssh-env.sh
+#   ssh -V
+# Ou caminho fixo:
+#   SSH_ROOT=/tmp/openssh-root bash bootstrap_openssh_client_userland.sh
+#
+# Password sem TTY: ver ssh_askpass_wrap.sh no mesmo directorio.
 
 set -u
 
-APT_CACHE="/tmp/apt-cache/archives"
-SSH_ROOT="/tmp/openssh-root"
-SOURCES_FILE="/etc/apt/sources.list"
-APT_FLAGS=(
-  -o Acquire::Check-Valid-Until=false
-  -o Acquire::AllowInsecureRepositories=true
-  -o Acquire::AllowDowngradeToInsecureRepositories=true
-  -o APT::Get::AllowUnauthenticated=true
-  -o Dir::Cache::archives="${APT_CACHE}"
-)
+_SCRIPT_PATH="${BASH_SOURCE[0]}"
+MAIN_MIRROR="${MAIN_MIRROR:-http://ftp.debian.org/debian/pool/main}"
+: "${SSH_ROOT:=/var/tmp/openssh-me}"
+: "${DEB_DIR:=/tmp/openssh-debs}"
+# Override opcional: relativo a MAIN_MIRROR (ex.: o/openssh/openssh-client_8.4p1-5+deb11u4_amd64.deb).
+: "${OPENSSH_CLIENT_REL:=o/openssh/openssh-client_8.4p1-5+deb11u3_amd64.deb}"
 
 log() { printf '[*] %s\n' "$*"; }
-ok() { printf '[+] %s\n' "$*"; }
-warn() { printf '[!] %s\n' "$*"; }
+ok()  { printf '[+] %s\n' "$*"; }
+warn(){ printf '[!] %s\n' "$*"; }
 
-ensure_sources() {
-  log "Configurando ${SOURCES_FILE} para archive.debian.org (bullseye)..."
-  cat > "${SOURCES_FILE}" <<'EOF'
-deb [trusted=yes] http://archive.debian.org/debian bullseye main contrib non-free
-deb [trusted=yes] http://archive.debian.org/debian bullseye-updates main contrib non-free
-EOF
+need_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# dpkg-deb liga-se a liblzma do sistema; LD_LIBRARY_PATH do SMB pode injectar liblzma
+# mais nova e falhar com "version XZ_* not found".
+dpkg_deb_x() {
+  env -u LD_LIBRARY_PATH dpkg-deb -x "$1" "$2"
 }
 
-apt_update() {
-  log "Criando cache APT temporario em ${APT_CACHE}..."
-  mkdir -p "${APT_CACHE}/partial"
-  log "Atualizando indices do APT..."
-  apt-get "${APT_FLAGS[@]}" update
-}
-
-install_openssh() {
-  log "Tentando instalar openssh-client via apt..."
-  if apt-get "${APT_FLAGS[@]}" install -y openssh-client; then
-    ok "openssh-client instalado pelo apt."
-    return 0
+fetch() {
+  local url="$1"
+  local out="$2"
+  if need_cmd wget; then
+    wget -q -c -O "${out}" "${url}" && return 0
+    warn "wget falhou: ${url}"
+    return 1
   fi
-  warn "Instalacao via apt/dpkg falhou; tentando fallback por extracao de .deb."
+  if need_cmd curl; then
+    curl -fsSL -o "${out}" "${url}" && return 0
+    warn "curl falhou: ${url}"
+    return 1
+  fi
+  warn "Sem wget/curl."
   return 1
 }
 
-extract_debs_fallback() {
-  local found=0
-  log "Extraindo pacotes .deb para ${SSH_ROOT}..."
-  mkdir -p "${SSH_ROOT}"
-  for deb in "${APT_CACHE}"/*.deb; do
-    if [[ -f "${deb}" ]]; then
-      found=1
-      dpkg-deb -x "${deb}" "${SSH_ROOT}"
-    fi
-  done
-  if [[ "${found}" -eq 0 ]]; then
-    warn "Nenhum .deb encontrado em ${APT_CACHE}. Falha no fallback."
-    return 1
-  fi
-  ok "Fallback concluido com extracao de .deb."
-}
-
-activate_env() {
-  local p1="${SSH_ROOT}/usr/bin"
-  local l1="${SSH_ROOT}/usr/lib/x86_64-linux-gnu"
-  local l2="${SSH_ROOT}/lib/x86_64-linux-gnu"
-
-  export PATH="${p1}:${PATH}"
-  export LD_LIBRARY_PATH="${l1}:${l2}:${LD_LIBRARY_PATH:-}"
-
-  if command -v ssh >/dev/null 2>&1; then
-    ok "ssh encontrado em: $(command -v ssh)"
-  else
-    warn "ssh nao encontrado no PATH mesmo apos bootstrap."
-    return 1
-  fi
-
-  ssh -V || {
-    warn "Falha ao executar ssh -V (possivel falta de biblioteca)."
-    return 1
-  }
-}
-
-print_source_hint() {
-  cat <<EOF
-
-[+] Para manter variaveis no shell atual, roda:
-    source "$0"
-
-Ou exporta manualmente:
-    export PATH="${SSH_ROOT}/usr/bin:\$PATH"
-    export LD_LIBRARY_PATH="${SSH_ROOT}/usr/lib/x86_64-linux-gnu:${SSH_ROOT}/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH"
-EOF
-}
-
-test_login_if_requested() {
-  if [[ "${1:-}" == "--test-login" ]]; then
-    local user="${2:-}"
-    local host="${3:-}"
-    if [[ -z "${user}" || -z "${host}" ]]; then
-      warn "Uso: $0 --test-login <user> <host>"
-      return 1
-    fi
-    log "Testando SSH para ${user}@${host}..."
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "${user}@${host}"
-  fi
+bail() {
+  warn "$*"
+  exit 1
 }
 
 main() {
-  ensure_sources
-  apt_update
-
-  if ! install_openssh; then
-    extract_debs_fallback
-    activate_env
-  else
-    ssh -V || warn "openssh instalado, mas ssh -V falhou."
+  if ! need_cmd dpkg-deb; then
+    bail "dpkg-deb nao encontrado (instale dpkg ou use maquina Debian-like)."
   fi
 
-  ok "Bootstrap SSH finalizado."
-  print_source_hint
-  test_login_if_requested "${1:-}" "${2:-}" "${3:-}"
+  if [[ "$(id -u 2>/dev/null || echo 1)" -eq 0 ]]; then
+    warn "Corres como root: este script NAO altera sources.list nem apt; so extrai .deb."
+  fi
+
+  mkdir -p "${DEB_DIR}"
+  log "Cache .deb: ${DEB_DIR}"
+
+  # Relativos a MAIN_MIRROR (ftp.debian.org/pool/main/...). Nomes sem epoch na URL.
+  local bundles=(
+    "${OPENSSH_CLIENT_REL}"
+    "o/openssl/libssl1.1_1.1.1w-0+deb11u1_amd64.deb"
+    "z/zlib/zlib1g_1.2.11.dfsg-2+deb11u2_amd64.deb"
+    "k/krb5/libgssapi-krb5-2_1.18.3-6+deb11u5_amd64.deb"
+    "k/krb5/libkrb5-3_1.18.3-6+deb11u5_amd64.deb"
+    "k/krb5/libk5crypto3_1.18.3-6+deb11u5_amd64.deb"
+    "k/krb5/libkrb5support0_1.18.3-6+deb11u5_amd64.deb"
+    "k/keyutils/libkeyutils1_1.6.1-2_amd64.deb"
+    "e/e2fsprogs/libcom-err2_1.46.2-2_amd64.deb"
+    "p/pam/libpam0g_1.4.0-9+deb11u1_amd64.deb"
+    "a/audit/libaudit1_3.0-2_amd64.deb"
+    "libs/libselinux/libselinux1_3.1-3_amd64.deb"
+    "s/systemd/libsystemd0_247.3-7+deb11u5_amd64.deb"
+    "x/xz-utils/liblzma5_5.2.5-2.1~deb11u1_amd64.deb"
+    "libz/libzstd/libzstd1_1.4.8+dfsg-2.1_amd64.deb"
+    "libb/libbsd/libbsd0_0.11.3-1+deb11u1_amd64.deb"
+    "libm/libmd/libmd0_1.0.3-3_amd64.deb"
+    "libc/libcbor/libcbor0_0.5.0+dfsg-2_amd64.deb"
+    "libe/libedit/libedit2_3.1-20191231-2+b1_amd64.deb"
+    "libf/libfido2/libfido2-1_1.6.0-2_amd64.deb"
+    "t/tcp-wrappers/libwrap0_7.6.q-31_amd64.deb"
+    # X11 / xauth (recomendacoes openssh-client; X11 forward)
+    "x/xauth/xauth_1.1-1_amd64.deb"
+    "libx/libxmu/libxmuu1_1.1.3-3_amd64.deb"
+    "libx/libx11/libx11-6_1.7.2-1+deb11u2_amd64.deb"
+    "libx/libx11/libx11-data_1.7.2-1+deb11u2_all.deb"
+    "libx/libxau/libxau6_1.0.9-1_amd64.deb"
+    "libx/libxcb/libxcb1_1.14-3_amd64.deb"
+    "libx/libxdmcp/libxdmcp6_1.1.2-3_amd64.deb"
+    "libx/libxext/libxext6_1.3.4-1+b1_amd64.deb"
+  )
+
+  local rel url name path
+  for rel in "${bundles[@]}"; do
+    name="${rel##*/}"
+    path="${DEB_DIR}/${name}"
+    if [[ -s "${path}" ]]; then
+      log "Ja existe: ${name}"
+      continue
+    fi
+    url="${MAIN_MIRROR}/${rel}"
+    log "Baixando ${name} ..."
+    fetch "${url}" "${path}" || bail "Falha no download. Rede, mirror ou OPENSSH_CLIENT_REL."
+  done
+
+  local _preferred="${SSH_ROOT}"
+  if [[ -e "${SSH_ROOT}" ]]; then
+    rm -rf "${SSH_ROOT}" 2>/dev/null || true
+    if [[ -e "${SSH_ROOT}" ]]; then
+      SSH_ROOT="/tmp/openssh-ul-$( (need_cmd id && id -u) || echo 0)-$$"
+      warn "Nao deu para apagar ${_preferred}. Novo prefixo: ${SSH_ROOT}"
+    fi
+  fi
+  mkdir -p "${SSH_ROOT}"
+
+  log "Extraindo para ${SSH_ROOT} (destino vazio) ..."
+  for path in "${DEB_DIR}"/*.deb; do
+    [[ -f "${path}" ]] || continue
+    dpkg_deb_x "${path}" "${SSH_ROOT}" || bail "Falha dpkg-deb -x ${path}"
+  done
+
+  local libgnu="${SSH_ROOT}/usr/lib/x86_64-linux-gnu"
+  local lib64="${SSH_ROOT}/lib/x86_64-linux-gnu"
+  local SSH_LD="${libgnu}:${lib64}"
+
+  local ssh_bin="${SSH_ROOT}/usr/bin/ssh"
+  if ! env LD_LIBRARY_PATH="${SSH_LD}" "${ssh_bin}" -V >/dev/null 2>&1; then
+    warn "ssh -V falhou. Diagnostico (ldd):"
+    env LD_LIBRARY_PATH="${SSH_LD}" ldd "${ssh_bin}" 2>/dev/null | grep 'not found' || true
+    bail "Binario ssh nao executavel com este LD_LIBRARY_PATH."
+  fi
+
+  cat >"${SSH_ROOT}/ssh-env.sh" <<EOF
+export SSH_ROOT="${SSH_ROOT}"
+export PATH="\${SSH_ROOT}/usr/bin:\${SSH_ROOT}/usr/sbin:\${PATH}"
+export LD_LIBRARY_PATH="${SSH_LD}:\${LD_LIBRARY_PATH:-}"
+if [[ -n "\${BASH_VERSION:-}" ]]; then
+  hash -r 2>/dev/null || true
+fi
+EOF
+  chmod 644 "${SSH_ROOT}/ssh-env.sh"
+
+  ok "$(env LD_LIBRARY_PATH="${SSH_LD}" "${ssh_bin}" -V 2>&1 | head -1)"
+  ok "Prefixo: ${SSH_ROOT}"
+  ok "ssh:     ${ssh_bin}"
+  ok "Ambiente: source ${SSH_ROOT}/ssh-env.sh"
+  ok "Password sem TTY: bash ssh_askpass_wrap.sh (no Kali/repo; copia para o pivot)"
+
+  cat <<EOF
+
+[!] amd64 Bullseye (glibc ~2.31). Em musl ou glibc antigo, nao corre.
+[!] Nao mistures extraccao manual repetida no mesmo directorio: apaga o prefixo ou usa SSH_ROOT novo.
+[!] Se algum .deb 404, actualiza o array em ${_SCRIPT_PATH##*/} ou OPENSSH_CLIENT_REL.
+
+EOF
 }
 
-main "${@:-}"
+main "$@"
