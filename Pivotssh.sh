@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cliente OpenSSH (ssh, scp, sftp) em userland: so wget/curl + dpkg-deb -x.
 # Nao usa apt nem escreve em /etc/apt (pivot sem root).
-#
+#teste
 # Evita o erro do "Pivotssh.sh" com tar: destino e apagado antes de extrair
 # (arvore antiga em /tmp/openssh-root causa "File exists" / "Cannot utime").
 #
@@ -146,8 +146,18 @@ main() {
     bail "Binario ssh nao executavel com este LD_LIBRARY_PATH."
   fi
 
+  # BASH_SOURCE: source /ABS/ssh-env.sh funciona mesmo se SSH_ROOT nao estiver na shell
+  # (evita expandir para /ssh-env.sh quando SSH_ROOT esta vazio).
   cat >"${SSH_ROOT}/ssh-env.sh" <<EOF
-export SSH_ROOT="${SSH_ROOT}"
+# Gerado por bootstrap_openssh_client_userland.sh — usar sempre caminho absoluto:
+#   source ${SSH_ROOT}/ssh-env.sh
+if [[ -n "\${BASH_SOURCE[0]:-}" ]]; then
+  SSH_ROOT="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+else
+  echo "[!] ssh-env.sh: usa bash (source ...) ou exporta SSH_ROOT=${SSH_ROOT}" >&2
+  return 1 2>/dev/null || exit 1
+fi
+export SSH_ROOT
 export PATH="\${SSH_ROOT}/usr/bin:\${SSH_ROOT}/usr/sbin:\${PATH}"
 export LD_LIBRARY_PATH="${SSH_LD}:\${LD_LIBRARY_PATH:-}"
 if [[ -n "\${BASH_VERSION:-}" ]]; then
@@ -159,11 +169,13 @@ EOF
   ok "$(env LD_LIBRARY_PATH="${SSH_LD}" "${ssh_bin}" -V 2>&1 | head -1)"
   ok "Prefixo: ${SSH_ROOT}"
   ok "ssh:     ${ssh_bin}"
-  ok "Ambiente: source ${SSH_ROOT}/ssh-env.sh"
+  ok "Ambiente (copia a linha exacta): source ${SSH_ROOT}/ssh-env.sh"
   ok "Password sem TTY: bash ssh_askpass_wrap.sh (no Kali/repo; copia para o pivot)"
 
   cat <<EOF
 
+[!] Se o script mudou o prefixo (ex.: nao deu para apagar /tmp/openssh-root), o SSH_ROOT da
+    tua shell NAO foi actualizado — usa o "Prefixo:" acima, NAO source "\$SSH_ROOT/ssh-env.sh".
 [!] amd64 Bullseye (glibc ~2.31). Em musl ou glibc antigo, nao corre.
 [!] Nao mistures extraccao manual repetida no mesmo directorio: apaga o prefixo ou usa SSH_ROOT novo.
 [!] Se algum .deb 404, actualiza o array em ${_SCRIPT_PATH##*/} ou OPENSSH_CLIENT_REL.
