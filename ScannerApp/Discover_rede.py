@@ -8,12 +8,13 @@ Recursos:
 - Considera conexão recusada como evidência de host ativo.
 - Varre portas TCP com concorrência controlada.
 - Salva os resultados em JSON para gerar o resumo posteriormente.
-- Aceita múltiplas sub-redes e intervalos de portas.
+- Detecta automaticamente a rede local e aceita múltiplas sub-redes.
+- Aceita intervalos de portas.
 
 Use somente em redes próprias ou com autorização explícita.
 
 Exemplos:
-    python3 discover_rede_melhorado.py
+    python3 discover_rede_melhorado.py  # detecta automaticamente a rede local
     python3 discover_rede_melhorado.py --subnet 10.100.85.0/24
     python3 discover_rede_melhorado.py --subnet 10.0.0.0/24 --ports 22,80,443,8000-8010
     python3 discover_rede_melhorado.py --no-ping --workers 48
@@ -58,7 +59,7 @@ DEFAULT_PORTS = [
     25565, 27017,
 ]
 
-DEFAULT_SUBNETS = ["10.0.0.0/24", "10.100.85.0/24"]
+DEFAULT_AUTO_PREFIX = 24
 DEFAULT_STATE_FILE = "enum_rede_state.json"
 CONNECT_TIMEOUT = 0.8
 ALIVE_TIMEOUT = 0.30
@@ -307,6 +308,94 @@ def read_interfaces() -> list[InterfaceInfo]:
     return interfaces
 
 
+RFC1918_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+VIRTUAL_INTERFACE_PREFIXES = (
+    "docker", "br-", "veth", "virbr", "podman", "cni", "flannel",
+)
+
+
+def is_rfc1918(address: ipaddress.IPv4Address) -> bool:
+    return any(address in network for network in RFC1918_NETWORKS)
+
+
+def local_ipv4_addresses(interfaces: list[InterfaceInfo]) -> list[ipaddress.IPv4Interface]:
+    addresses: list[ipaddress.IPv4Interface] = []
+    for interface in interfaces:
+        for value in interface.ipv4:
+            try:
+                parsed = ipaddress.ip_interface(value)
+            except ValueError:
+                continue
+            if isinstance(parsed, ipaddress.IPv4Interface):
+                addresses.append(parsed)
+    return addresses
+
+
+def detect_auto_subnets(
+    interfaces: list[InterfaceInfo],
+    auto_prefix: int,
+    include_virtual: bool,
+) -> list[str]:
+    """Detecta redes RFC1918 locais, usando por padrão uma fatia /24 segura."""
+    detected: set[ipaddress.IPv4Network] = set()
+
+    for interface in interfaces:
+        name_lower = interface.name.lower()
+        if interface.state.upper() == "DOWN":
+            continue
+        if not include_virtual and name_lower.startswith(VIRTUAL_INTERFACE_PREFIXES):
+            continue
+
+        for value in interface.ipv4:
+            try:
+                parsed = ipaddress.ip_interface(value)
+            except ValueError:
+                continue
+
+            if not isinstance(parsed, ipaddress.IPv4Interface):
+                continue
+            if not is_rfc1918(parsed.ip):
+                continue
+
+            # Nunca amplia além da rede configurada na interface. Ex.: uma
+            # interface /28 permanece /28; uma /16 vira uma fatia /24 local.
+            prefix = max(parsed.network.prefixlen, auto_prefix)
+            detected.add(ipaddress.ip_network(f"{parsed.ip}/{prefix}", strict=False))
+
+    return [str(network) for network in sorted(detected, key=lambda item: (int(item.network_address), item.prefixlen))]
+
+
+def warn_if_targets_are_not_local(
+    reporter: Reporter,
+    subnets: list[str],
+    interfaces: list[InterfaceInfo],
+) -> None:
+    local_addresses = local_ipv4_addresses(interfaces)
+    if not local_addresses:
+        return
+
+    target_networks = [ipaddress.ip_network(value, strict=False) for value in subnets]
+    matching = [
+        address
+        for address in local_addresses
+        if any(address.ip in network for network in target_networks)
+    ]
+
+    if matching:
+        return
+
+    local_text = ", ".join(str(address) for address in local_addresses)
+    reporter.log()
+    reporter.log("[AVISO] Nenhum endereço IPv4 local pertence às redes alvo.")
+    reporter.log(f"        Endereços locais: {local_text}")
+    reporter.log("        As redes podem ser roteadas, mas não são a rede local direta.")
+
+
 def route_hex_to_ipv4(value: str) -> str:
     """Converte IPv4 little-endian de /proc/net/route para notação decimal."""
     packed = struct.pack("<I", int(value, 16))
@@ -351,7 +440,13 @@ def read_routes() -> list[str]:
     return routes
 
 
-def show_local_info(reporter: Reporter, subnets: list[str], ports: list[int]) -> None:
+def show_local_info(
+    reporter: Reporter,
+    subnets: list[str],
+    ports: list[int],
+    interfaces: list[InterfaceInfo],
+    subnet_source: str,
+) -> None:
     section_header("ETAPA 1 — Informações locais", reporter)
     reporter.log(f"Data UTC       : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')}")
     reporter.log(f"Hostname       : {socket.gethostname()}")
@@ -359,7 +454,6 @@ def show_local_info(reporter: Reporter, subnets: list[str], ports: list[int]) ->
     if hasattr(os, "getuid"):
         reporter.log(f"UID            : {os.getuid()}")
 
-    interfaces = read_interfaces()
     if interfaces:
         reporter.log("Interfaces     :")
         for interface in interfaces:
@@ -377,6 +471,7 @@ def show_local_info(reporter: Reporter, subnets: list[str], ports: list[int]) ->
         reporter.log("Rotas padrão   : não foi possível identificar")
 
     reporter.log(f"Redes alvo     : {', '.join(subnets)}")
+    reporter.log(f"Origem das redes: {subnet_source}")
     reporter.log(f"Portas padrão  : {len(ports)} portas")
     reporter.log(f"Lista de portas: {','.join(map(str, ports))}")
 
@@ -599,6 +694,14 @@ def scan_subnet(
     reporter.log(f"Hosts considerados ativos  : {active_count}")
     reporter.log(f"Hosts com portas abertas   : {open_count}")
 
+    if active_count == 0:
+        reporter.log()
+        reporter.log("[AVISO] Nenhum host respondeu a ICMP ou TCP nesta varredura.")
+        reporter.log("        Isso não prova que a rede esteja vazia: firewall, security group")
+        reporter.log("        ou ACL podem descartar todas as sondagens.")
+        if skip_dead:
+            reporter.log("        Tente --no-skip-dead para testar todas as portas mesmo sem descoberta.")
+
     return results
 
 
@@ -763,6 +866,17 @@ def positive_int(value: str) -> int:
     return number
 
 
+def prefix_length(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("deve ser um número inteiro") from exc
+
+    if not 8 <= number <= 32:
+        raise argparse.ArgumentTypeError("deve estar entre 8 e 32")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Descoberta de rede IPv4 com varredura TCP e resumo persistente",
@@ -775,6 +889,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=parse_subnet,
         metavar="CIDR",
         help="Rede IPv4 para varrer; repita o argumento para várias redes",
+    )
+    parser.add_argument(
+        "--auto-prefix",
+        type=prefix_length,
+        default=DEFAULT_AUTO_PREFIX,
+        metavar="BITS",
+        help="Prefixo usado na detecção automática; /24 evita varrer uma /16 inteira",
+    )
+    parser.add_argument(
+        "--include-virtual",
+        action="store_true",
+        help="Incluir interfaces virtuais como docker0, bridges e veth na detecção automática",
     )
     parser.add_argument(
         "--ports",
@@ -857,7 +983,23 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    subnets: list[str] = args.subnet if args.subnet else DEFAULT_SUBNETS.copy()
+    interfaces = read_interfaces()
+    if args.subnet:
+        subnets: list[str] = args.subnet
+        subnet_source = "informadas por --subnet"
+    else:
+        subnets = detect_auto_subnets(
+            interfaces,
+            auto_prefix=args.auto_prefix,
+            include_virtual=args.include_virtual,
+        )
+        subnet_source = f"detecção automática das interfaces (/{args.auto_prefix})"
+
+        if not subnets:
+            parser.error(
+                "não foi possível detectar uma rede IPv4 privada; informe --subnet REDE/CIDR"
+            )
+
     ports: list[int] = args.ports
 
     try:
@@ -865,7 +1007,14 @@ def main() -> int:
             reporter.log("Use somente em redes próprias ou formalmente autorizadas.")
 
             if args.etapa in {"1", "all"}:
-                show_local_info(reporter, subnets, ports)
+                show_local_info(
+                    reporter,
+                    subnets,
+                    ports,
+                    interfaces,
+                    subnet_source,
+                )
+                warn_if_targets_are_not_local(reporter, subnets, interfaces)
 
             results_by_subnet: dict[str, list[HostScanResult]] = {}
 
