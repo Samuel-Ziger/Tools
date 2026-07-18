@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timezone
 
 
-DEFAULT_PORTS = [21, 22, 80, 443, 445, 3306, 8080, 8443]
+DEFAULT_PORTS = [21, 22, 80, 443, 445, 3306, 8080, 8443,3030]
 DEFAULT_SUBNETS = ["10.0.0.0/24", "10.100.85.0/24"]
 CONNECT_TIMEOUT = 1.0
 ALIVE_TIMEOUT = 0.35      # probe rápido antes de varrer todas as portas
